@@ -38,8 +38,10 @@ The engine is launched directly using the current executable, without a shell. I
 gets only `HOME` and `XDG_CONFIG_HOME` for configuration, rather than inheriting API
 tokens and the application's entire environment. Framed IPC has length/allocation
 checks, a 64 MiB frame cap and a 256 KiB lint-input cap. Stale results are rejected
-by exact-text/epoch checks. Worker failures can fall back to in-process checking,
-which remains local. Process separation is fault containment, not an OS sandbox.
+by exact-text/epoch checks. Persistent engine failures disable checking for the session and retain only byte
+forwarding. There is no production in-process fallback; the old
+`TUIPO_ENGINE=inprocess` override is no longer honored. Process separation is fault
+containment, not an OS sandbox.
 
 The selected application necessarily receives its arguments, normal environment,
 working directory and stdin. An attacker controlling that executable, PATH, local
@@ -71,7 +73,18 @@ switch and OS terminal/process facilities. It does not scan projects, home folde
 credentials, user identity or unrelated files. Config/path environment variables,
 terminal-style flags, executable location and cwd are used only for their operational
 purpose. Explicit `tuipo config`, `off` and `on` can write settings/switch state;
-these contain no input history. An explicitly configured exception file is read,
+these contain no input history. Config saves create a new mode-0600 temporary file
+with create-new semantics before atomic rename; existing files/symlinks cannot be
+truncated through that temporary path. Invalid/unreadable configuration disables
+input processing and launches the selected app directly (a missing config uses
+defaults). Config errors suppress TOML contents, and launch errors suppress raw
+child diagnostics that may include PATH/arguments. `off` is checked before each input batch and render
+event (including periodic ticks). New launches bypass the PTY. Existing wrappers
+clear their inferred input/screen/lint state and stop the engine, then remain byte
+forwarders until exit. `on` affects subsequent explicit app launches; it never
+reconstructs an old disabled session. Snapshots are invalidated when switching off.
+Already-read batches and switch transitions cannot form an atomic privacy boundary;
+use direct launch before entering sensitive data. An explicitly configured exception file is read,
 not populated automatically from prompts.
 
 Shell-hook installation (`tuipo init`) is disabled, including `--dry-run` and
@@ -117,14 +130,15 @@ Tuipo's control.
 
 Corrections require explicit confirmation and a fresh matching word/span. Unsafe
 Unicode edits, injected controls/newlines, active paste and ambiguous menu positions
-are refused. The selected app still owns editing semantics; custom bindings/history,
+are refused. Menu rendering also rejects control/non-unit-width suggestion text
+rather than emitting terminal commands from dictionary data. The selected app still owns editing semantics; custom bindings/history,
 mouse editing and redraws can desynchronize the inferred buffer. Terminal escape
 output from the app is forwarded unchanged: hostile OSC/clipboard/window sequences
 and malicious terminal output are not sanitized by this wrapper. A noisy child,
 huge input or unbounded event queues can cause resource exhaustion. Do not treat
 Tuipo as a terminal emulator sandbox or an input-integrity guarantee.
 
-## Dependency audit (2026-11-09)
+## Dependency audit (rechecked 2026-11-10)
 
 `Cargo.lock` is committed. Use `cargo build --locked --release`, `cargo test --locked`
 and `cargo install --path . --locked` to preserve it. Cargo.lock pins the tested
@@ -169,6 +183,43 @@ cargo build --locked --release
 
 The audit downloads only public advisory/index data. It does not read prompts.
 There is no audit invocation from the running spellchecker.
+
+## Publication and automatic integration gate
+
+The gate is **closed**. No fork, remote update, merge, push, shell function,
+dotfile change, LaunchAgent or autostart activation is authorized by this review.
+Known high-severity ZIP findings remain. Inspection of the current published
+Harper 3.0.0 manifest also found `zip = "8.6.0"`; merely upgrading Harper is not a
+complete fix. No unreviewed major-version dependency substitution was applied.
+
+A raw-TUI application may request a token in the same stream used for ordinary
+prose. There is no verified Codex API that marks safe prose for this wrapper, so
+fully excluding secrets from an automatic PTY wrapper cannot currently be justified.
+Password heuristics are not accepted as a publication/activation gate.
+SSH-marked (`SSH_CONNECTION`, `SSH_CLIENT`, `SSH_TTY`) and nested (`TUIPO_ACTIVE`)
+launches execute the selected app directly without checker processing; only the
+presence of those variables is inspected. This does not make the selected app
+itself confidential or prevent its network/history operations.
+
+The historical repository scan found local home-path metadata in two earlier
+`docs/VALIDATION.md` blobs and a historical `.DS_Store` blob. The current documentation
+has been scrubbed, but history was not rewritten. These findings need an explicit
+history/privacy decision before publication. Known credential signature scans found
+no credential match; that finite scan does not prove there are no secrets or PII,
+particularly in binary demo assets or commit identities.
+
+The inherited release workflow contained write permissions, unpinned Actions,
+`curl | sh` installers and an upstream-author Homebrew publication target. That
+workflow and cargo-dist publication settings have been removed, rather than reused
+for this unpublished fork. There are no remaining release/installer workflows.
+Normal Cargo dependency build scripts still execute during developer builds;
+`Cargo.lock` and source checksums are not a supply-chain sandbox.
+
+See [the publication audit](docs/PUBLICATION_AUDIT.md),
+[the integration design](docs/INTEGRATION.md), the committed dependency report and
+license inventory. `gh auth status` succeeded, but authentication is not security
+approval; no remote mutation was performed. User shell files may only be changed
+after all gates, a complete exact diff and separate user confirmation.
 
 ## Evidence and reporting
 

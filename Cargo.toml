@@ -2,7 +2,7 @@
 name = "tuipo"
 version = "0.2.0"
 edition = "2024"
-description = "Grammarly-style spell-check for your terminal — underlines typos as you type in any TUI"
+description = "Local Russian and English terminal spellchecking with confirmed keyboard corrections"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/ARahim3/tuipo"
 homepage = "https://github.com/ARahim3/tuipo"
@@ -42,32 +42,3 @@ assert_cmd = "2"
 [profile.release]
 lto = "thin"
 strip = "symbols"
-
-# Config for `cargo dist` (https://github.com/axodotdev/cargo-dist). The
-# `cargo-dist-version` and `ci` keys are filled in by `dist init` (see
-# RELEASING.md) so they always match your installed dist version.
-[profile.dist]
-inherits = "release"
-lto = "thin"
-
-# Config for 'dist'
-[workspace.metadata.dist]
-# Target platforms to build apps for (Rust target-triple syntax)
-targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"]
-# The installers to generate for each app
-installers = ["shell", "homebrew"]
-# A GitHub repo to push Homebrew formulas to
-tap = "ARahim3/homebrew-tuipo"
-# Actually publish the generated formula to the tap above (without this, dist
-# builds tuipo.rb but never pushes it — the tap stays empty)
-publish-jobs = ["homebrew"]
-# Which actions to run on pull requests
-pr-run-mode = "plan"
-# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
-cargo-dist-version = "0.32.0"
-# CI backends to support
-ci = "github"
-# Path that installers should place binaries in
-install-path = "CARGO_HOME"
-# Whether to install an updater program
-install-updater = false

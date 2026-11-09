@@ -70,7 +70,7 @@ impl DebugLog {
             EngineMetadata::Failure { reason, pid, count } => {
                 format!("{reason} pid={pid} failure={count}")
             }
-            EngineMetadata::Fallback => "falling back to in-process linting".into(),
+            EngineMetadata::Disabled => "checking disabled after engine failure".into(),
         };
         self.line("ENGINE", &payload);
     }
@@ -170,7 +170,7 @@ pub enum EngineMetadata {
         pid: u32,
         count: u32,
     },
-    Fallback,
+    Disabled,
 }
 
 fn open_private_log(path: &std::path::Path) -> std::io::Result<std::fs::File> {
@@ -213,7 +213,7 @@ mod tests {
         log.log_prints("outputCanary_e23".chars().count());
         log.log_fix();
         log.log_boundary();
-        log.log_engine(EngineMetadata::Fallback);
+        log.log_engine(EngineMetadata::Disabled);
         log.log_engine(EngineMetadata::Spawn { pid: 42 });
         log.log_engine(EngineMetadata::Ready {
             pid: 42,

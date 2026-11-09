@@ -13,7 +13,30 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 fn tuipo() -> Command {
     let mut cmd = Command::cargo_bin("tuipo").expect("binary `tuipo` not built");
     cmd.timeout(TIMEOUT);
+    for key in [
+        "TUIPO_PRIVATE",
+        "TUIPO_ACTIVE",
+        "SSH_CONNECTION",
+        "SSH_CLIENT",
+        "SSH_TTY",
+    ] {
+        cmd.env_remove(key);
+    }
     cmd.env("XDG_CONFIG_HOME", isolated_config_dir());
+    cmd
+}
+
+fn tuipo_process() -> std::process::Command {
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_tuipo"));
+    for key in [
+        "TUIPO_PRIVATE",
+        "TUIPO_ACTIVE",
+        "SSH_CONNECTION",
+        "SSH_CLIENT",
+        "SSH_TTY",
+    ] {
+        cmd.env_remove(key);
+    }
     cmd
 }
 
@@ -72,7 +95,7 @@ fn fresh_config_dir(name: &str) -> std::path::PathBuf {
 }
 
 fn tuipo_switch(config_dir: &std::path::Path, which: &str) -> String {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_tuipo"))
+    let out = tuipo_process()
         .arg(which)
         .env("XDG_CONFIG_HOME", config_dir)
         .output()
@@ -212,7 +235,7 @@ fn multibyte_output_passes_through_unchanged() {
 /// sequence wrapping the expected misspelling.
 #[test]
 fn paint_emits_underline_ansi_after_pause() {
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use std::thread;
     use std::time::Duration;
 
@@ -221,7 +244,7 @@ fn paint_emits_underline_ansi_after_pause() {
         std::env::temp_dir().join(format!("tuipo-paint-test-{}.log", std::process::id()));
     let _ = std::fs::remove_file(&log_path);
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_tuipo"))
+    let mut child = tuipo_process()
         .args(["--", "cat"])
         .env("TUIPO_DEBUG_LOG", &log_path)
         // Hermetic: a real `tuipo off` (or config) on the dev machine must
@@ -307,14 +330,14 @@ fn paint_emits_underline_ansi_after_pause() {
 #[test]
 fn tab_replaces_most_recent_misspelling() {
     use std::io::Write;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use std::thread;
     use std::time::Duration;
 
     let log_path = std::env::temp_dir().join(format!("tuipo-tab-test-{}.log", std::process::id()));
     let _ = std::fs::remove_file(&log_path);
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_tuipo"))
+    let mut child = tuipo_process()
         .args(["--", "cat"])
         .env("TUIPO_DEBUG_LOG", &log_path)
         // Tab fix is opt-in; enable for this test.
@@ -386,11 +409,11 @@ fn tab_replaces_most_recent_misspelling() {
 #[test]
 fn multiline_paste_round_trips_through_child() {
     use std::io::Write;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use std::thread;
     use std::time::Duration;
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_tuipo"))
+    let mut child = tuipo_process()
         .args(["--", "cat"])
         .env("XDG_CONFIG_HOME", isolated_config_dir())
         .stdin(Stdio::piped())
@@ -472,13 +495,13 @@ fn engine_is_not_started_without_typing() {
 /// back, and the respawned engine's lints still get painted.
 #[test]
 fn idle_engine_exits_and_respawns_on_next_keystroke() {
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use std::thread;
 
     let log_path = std::env::temp_dir().join(format!("tuipo-idle-test-{}.log", std::process::id()));
     let _ = std::fs::remove_file(&log_path);
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_tuipo"))
+    let mut child = tuipo_process()
         .args(["--", "cat"])
         .env("TUIPO_DEBUG_LOG", &log_path)
         .env("TUIPO_PLAIN_UNDERLINE", "1")
@@ -527,13 +550,13 @@ fn idle_engine_exits_and_respawns_on_next_keystroke() {
 /// notices, starts a new one on the next keystroke, and keeps painting.
 #[test]
 fn killed_engine_is_replaced() {
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use std::thread;
 
     let log_path = std::env::temp_dir().join(format!("tuipo-kill-test-{}.log", std::process::id()));
     let _ = std::fs::remove_file(&log_path);
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_tuipo"))
+    let mut child = tuipo_process()
         .args(["--", "cat"])
         .env("TUIPO_DEBUG_LOG", &log_path)
         .env("TUIPO_PLAIN_UNDERLINE", "1")
@@ -553,7 +576,9 @@ fn killed_engine_is_replaced() {
             "engine never became ready"
         );
         let pid = last_engine_pid(&log).expect("engine pid in debug log");
-        let killed = Command::new("kill").args(["-9", &pid.to_string()]).status();
+        let killed = std::process::Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .status();
         assert!(
             killed.is_ok_and(|s| s.success()),
             "could not kill engine {pid}"
@@ -589,9 +614,9 @@ fn killed_engine_is_replaced() {
 #[test]
 fn engine_subcommand_speaks_the_wire_protocol() {
     use std::io::{Read, Write};
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
 
-    let mut engine = Command::new(env!("CARGO_BIN_EXE_tuipo"))
+    let mut engine = tuipo_process()
         .arg("__engine")
         .env("XDG_CONFIG_HOME", isolated_config_dir())
         .stdin(Stdio::piped())
@@ -682,15 +707,15 @@ fn off_switch_runs_commands_unwrapped() {
 /// underlined, stops linting and stops its engine; `tuipo on` brings it
 /// all back.
 #[test]
-fn off_switch_pauses_and_resumes_running_sessions() {
-    use std::process::{Command, Stdio};
+fn off_switch_latches_running_session_to_forwarding_until_restart() {
+    use std::process::Stdio;
     use std::thread;
 
     let config = fresh_config_dir("offlive");
     let log_path = std::env::temp_dir().join(format!("tuipo-offlive-{}.log", std::process::id()));
     let _ = std::fs::remove_file(&log_path);
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_tuipo"))
+    let mut child = tuipo_process()
         .args(["--", "cat"])
         .env("TUIPO_DEBUG_LOG", &log_path)
         .env("TUIPO_PLAIN_UNDERLINE", "1")
@@ -725,15 +750,7 @@ fn off_switch_pauses_and_resumes_running_sessions() {
         type_slowly(&mut stdin, "\n");
 
         tuipo_switch(&cfg, "on");
-        assert!(
-            wait_for_log(&log, "SWITCH   on", 1, Duration::from_secs(5)),
-            "on not noticed"
-        );
         type_slowly(&mut stdin, "abuot ");
-        assert!(
-            wait_for_log(&log, "ready pid=", 2, ENGINE_READY_TIMEOUT),
-            "engine not back"
-        );
         thread::sleep(Duration::from_millis(700));
         drop(stdin);
     });
@@ -758,19 +775,28 @@ fn off_switch_pauses_and_resumes_running_sessions() {
     );
     assert!(!raw.contains("\x1b[4mwrold"), "painted while off{}", ctx());
     assert!(
-        raw.contains("\x1b[4mabuot\x1b[24m"),
-        "not painting after on{}",
-        ctx()
+        !raw.contains("\x1b[4mabuot\x1b[24m"),
+        "old session resumed after on"
+    );
+    assert_eq!(
+        log.matches("ready pid=").count(),
+        1,
+        "engine restarted in disabled session"
+    );
+    let off_log = log.split("SWITCH   off").nth(1).unwrap();
+    assert!(
+        !off_log.contains("INPUT") && !off_log.contains("PRINTS") && !off_log.contains("LINTS"),
+        "text processing continued after off"
     );
 }
 
 #[test]
 fn debug_log_excludes_prompt_output_password_and_token_canaries() {
     use std::io::Write;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     let cfg = fresh_config_dir("privacy-log");
     let log_path = cfg.join("metadata.log");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_tuipo"))
+    let mut child = tuipo_process()
         .args(["--", "cat"])
         .env("XDG_CONFIG_HOME", &cfg)
         .env("TUIPO_DEBUG_LOG", &log_path)
@@ -851,10 +877,10 @@ fn init_does_not_install_hooks_or_touch_dotfiles() {
 #[test]
 fn canonical_password_input_is_forwarded_without_buffering_or_linting() {
     use std::io::{BufRead, BufReader, Read, Write};
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     let cfg = fresh_config_dir("canonical-secret");
     let log_path = cfg.join("metadata.log");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_tuipo"))
+    let mut child = tuipo_process()
         .args(["--", "sh", "-c", "stty -echo; printf 'SECRET_READY\\n'; IFS= read -r secret; stty echo; printf 'SECRET_DONE\\n'"])
         .env("XDG_CONFIG_HOME", &cfg).env("TUIPO_DEBUG_LOG", &log_path)
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
@@ -880,4 +906,97 @@ fn canonical_password_input_is_forwarded_without_buffering_or_linting() {
             && !log.contains("spawn pid=")
     );
     std::fs::remove_dir_all(cfg).unwrap();
+}
+
+#[test]
+fn on_off_status_are_explicit_persistent_and_apply_to_new_launches() {
+    let cfg = fresh_config_dir("status-controls");
+    let status = || {
+        tuipo()
+            .env("XDG_CONFIG_HOME", &cfg)
+            .arg("status")
+            .output()
+            .unwrap()
+    };
+    assert!(String::from_utf8_lossy(&status().stdout).contains("mode: on"));
+    tuipo_switch(&cfg, "off");
+    assert!(String::from_utf8_lossy(&status().stdout).contains("mode: off"));
+    tuipo_switch(&cfg, "off");
+    let log = cfg.join("must-not-exist.log");
+    let output = tuipo()
+        .env("XDG_CONFIG_HOME", &cfg)
+        .env("TUIPO_DEBUG_LOG", &log)
+        .args(["--", "cat"])
+        .write_stdin("secretOffCanary_709\n")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"secretOffCanary_709\n");
+    assert!(!log.exists());
+    tuipo_switch(&cfg, "on");
+    tuipo_switch(&cfg, "on");
+    let text = String::from_utf8(status().stdout).unwrap();
+    assert!(text.contains("mode: on") && text.contains("blocked"));
+    std::fs::remove_dir_all(cfg).unwrap();
+}
+
+#[test]
+fn ssh_and_nested_launches_bypass_all_processing() {
+    let cfg = fresh_config_dir("restricted-launch");
+    for variable in ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "TUIPO_ACTIVE"] {
+        let log = cfg.join("must-not-exist.log");
+        let output = tuipo()
+            .env("XDG_CONFIG_HOME", &cfg)
+            .env(variable, "synthetic-marker")
+            .env("TUIPO_DEBUG_LOG", &log)
+            .args(["--", "cat"])
+            .write_stdin("restrictedCanary_5\n")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"restrictedCanary_5\n");
+        assert!(!log.exists());
+    }
+    std::fs::remove_dir_all(cfg).unwrap();
+}
+
+#[test]
+fn malformed_configuration_bypasses_processing_without_echoing_its_contents() {
+    let cfg = fresh_config_dir("invalid-private-config");
+    std::fs::create_dir_all(cfg.join("tuipo")).unwrap();
+    std::fs::write(
+        cfg.join("tuipo/config.toml"),
+        "unknown = 'configurationSecretCanary_48'\n",
+    )
+    .unwrap();
+    let log = cfg.join("must-not-exist.log");
+    let output = tuipo()
+        .env("XDG_CONFIG_HOME", &cfg)
+        .env("TUIPO_DEBUG_LOG", &log)
+        .args(["--", "cat"])
+        .write_stdin("privateInputCanary_8\n")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"privateInputCanary_8\n");
+    let diagnostic = String::from_utf8_lossy(&output.stderr);
+    assert!(diagnostic.contains("processing disabled"));
+    assert!(!diagnostic.contains("configurationSecretCanary"));
+    assert!(!log.exists());
+    std::fs::remove_dir_all(cfg).unwrap();
+}
+
+#[test]
+fn launch_errors_do_not_dump_executable_arguments_or_path_values() {
+    let output = tuipo()
+        .env("PATH", "/synthetic/pathCanary_51")
+        .args(["--", "missingAppCanary_67", "--token", "argumentCanary_32"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let diagnostic = String::from_utf8_lossy(&output.stderr);
+    assert!(diagnostic.contains("could not start"));
+    for canary in ["pathCanary", "missingAppCanary", "argumentCanary"] {
+        assert!(!diagnostic.contains(canary));
+    }
 }

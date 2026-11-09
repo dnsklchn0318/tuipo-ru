@@ -1,8 +1,7 @@
 # Validation of the RU/EN fork
 
 Environment: macOS 27.2 (26B123), Darwin ARM64. Working branch:
-`feat/russian-spellcheck`. Tested in the existing local checkout at
-`/home/USER/Desktop/Work/Personal/tuipo-ru`.
+`feat/russian-spellcheck`. Tested in the existing local checkout.
 
 | Check | Result |
 | --- | --- |
@@ -66,3 +65,15 @@ RustSec cargo-audit is **not passing**: eight zip vulnerability records and thre
 warnings remain in the final lockfile. See the security document and committed
 JSON report for exact versions, upstream constraints and database revision.
 This follow-up does not add native GUI/Codex verification to the earlier results.
+
+## Publication-gate follow-up (2026-11-10)
+
+Current results supersede the older on/off/fallback behavior above.
+317 unit and 27 integration tests pass, with one original diagnostic probe ignored.
+Format, strict Clippy, release build and the local-only policy guard pass.
+`off` now permanently suspends input/screen reconstruction in an existing proxy;
+`on` affects new launches. SSH/nested launch bypass and engine-failure disabling
+are tested. `.gitignore` positive/public-file checks and the Cargo package file-list
+review pass. RustSec and historical metadata scans still fail their publication
+gates. See [PUBLICATION_AUDIT.md](PUBLICATION_AUDIT.md) and the committed reports.
+No native Terminal.app/Codex or terminal-GUI relaunch test was performed.

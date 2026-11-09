@@ -308,6 +308,14 @@ pub fn build_overlay(
     {
         return (build_restore(prior_region, matcher, screen), None);
     }
+    // Dictionary content is data, never terminal commands. Suppress an
+    // ambiguous/unsafe menu rather than writing controls from suggestions.
+    if suggestions.iter().any(|s| {
+        s.chars()
+            .any(|c| unicode_width::UnicodeWidthChar::width(c) != Some(1))
+    }) {
+        return (build_restore(prior_region, matcher, screen), None);
+    }
     if suggestions.is_empty() {
         let bytes = build_restore(prior_region, matcher, screen);
         return (bytes, None);
@@ -1107,5 +1115,58 @@ mod tests {
             !gate.buffer_shrank,
             "post-boundary first keystroke must not register as shrink"
         );
+    }
+}
+
+#[cfg(test)]
+mod suggestion_control_tests {
+    use super::*;
+    #[test]
+    fn dictionary_suggestions_cannot_emit_terminal_controls() {
+        let mut issue = SpellIssue {
+            byte_start: 0,
+            byte_end: 3,
+            char_start: 0,
+            char_end: 3,
+            word: "teh".into(),
+            message: String::new(),
+            suggestions: vec!["the".into()],
+            category: crate::spell::IssueCategory::Spelling,
+            priority: 50,
+            rule: "SpellCheck".into(),
+        };
+        let mut matcher = EchoMatcher::new();
+        let mut observer = crate::screen::ScreenObserver::new(80, 24);
+        let mut events = Vec::new();
+        observer.observe_with_events(b"\x1b[2;1Hteh ", &mut events);
+        for event in events {
+            matcher.apply_screen_event(&event);
+        }
+        matcher.apply_input(crate::event::InputEvent::Lints {
+            issues: vec![issue.clone()],
+            buffer_chars: 4,
+            buffer_text: "teh ".into(),
+            buffer_cursor: 3,
+        });
+        let (_, safe_region) = build_overlay(
+            &RenderTarget::Hover(&issue),
+            &matcher,
+            observer.state(),
+            None,
+        );
+        assert!(
+            safe_region.is_some(),
+            "safe control menu must actually render"
+        );
+        issue
+            .suggestions
+            .push("\x1b]52;c;synthetic-payload\x07".into());
+        let (bytes, region) = build_overlay(
+            &RenderTarget::Hover(&issue),
+            &matcher,
+            observer.state(),
+            None,
+        );
+        assert!(bytes.is_empty() && region.is_none());
     }
 }

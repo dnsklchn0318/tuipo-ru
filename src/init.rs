@@ -30,7 +30,7 @@ pub fn run_off() -> i32 {
     match switch_off(&path) {
         Ok(true) => {
             println!(
-                "tuipo is off: open tabs stop underlining within a second, and new tabs start without it.\n\
+                "tuipo is off: running sessions become forwarding-only; new launches bypass processing.\n\
                  Run `tuipo on` to turn it back on."
             );
             0
@@ -55,8 +55,8 @@ pub fn run_on() -> i32 {
     match switch_on(&path) {
         Ok(true) => {
             println!(
-                "tuipo is on: open tabs pick it back up within a second, and new tabs start with it.\n\
-                 (Tabs opened while it was off stay plain until you open new ones.)"
+                "tuipo is on for subsequent explicit launches.\n\
+                 (Restart an existing application to resume checking.)"
             );
             0
         }
@@ -71,18 +71,49 @@ pub fn run_on() -> i32 {
     }
 }
 
+/// Report configuration without enabling integration or inspecting terminal text.
+pub fn run_status() -> i32 {
+    let Some(_) = crate::config::off_switch_path() else {
+        eprintln!("tuipo status: cannot determine configuration directory");
+        return 1;
+    };
+    if crate::config::restricted_launch() {
+        println!("mode: bypass (private, SSH or nested application launch)");
+    } else if crate::config::switched_off() {
+        println!("mode: off (no spelling input processing)");
+    } else {
+        let cfg = crate::config::Config::load();
+        if cfg.languages.is_empty() {
+            println!("mode: bypass (no enabled languages or unavailable configuration)");
+        } else if cfg.validate_spelling().is_err() {
+            println!("mode: blocked (invalid spelling configuration)");
+        } else {
+            println!("mode: on (subsequent explicit application launches)");
+        }
+    }
+    println!("automatic integration: blocked (security gate not passed)");
+    println!("Existing sessions disabled with off require application restart.");
+    0
+}
+
 /// Create the off switch. `Ok(true)` if tuipo was on.
 fn switch_off(path: &Path) -> io::Result<bool> {
-    if path.exists() {
-        return Ok(false);
-    }
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    std::fs::write(
-        path,
-        "tuipo is switched off while this file exists; `tuipo on` removes it.\n",
-    )?;
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => return Ok(false),
+        Err(err) => return Err(err),
+    };
+    file.write_all(b"tuipo is switched off while this file exists; tuipo on removes it.\n")?;
     Ok(true)
 }
 
@@ -304,5 +335,23 @@ export FOO=bar
         assert!(!switch_on(&path).unwrap(), "second on is a no-op");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod switch_path_tests {
+    use super::*;
+    #[test]
+    fn off_does_not_follow_a_dangling_symlink() {
+        let dir = std::env::temp_dir().join(format!("tuipo-off-symlink-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("must-not-be-created");
+        let marker = dir.join("off");
+        std::os::unix::fs::symlink(&target, &marker).unwrap();
+        assert!(!switch_off(&marker).unwrap());
+        assert!(!target.exists());
+        switch_on(&marker).unwrap();
+        assert!(!target.exists());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -43,6 +43,8 @@ pub fn install_panic_hook() {
             return;
         }
         let _ = crossterm::terminal::disable_raw_mode();
-        eprintln!("tuipo: internal error; terminal mode restored (panic details suppressed)");
+        eprintln!(
+            "tuipo: internal error; terminal restoration attempted (panic details suppressed)"
+        );
     }));
 }

@@ -1,13 +1,82 @@
-/target
+# Rust build products; Cargo.lock intentionally stays tracked.
+/target/
+**/target/
+
+# Local AI-agent instructions and state, at every nesting level.
+AGENTS.md
 CLAUDE.md
-.claude/settings.local.json
+GEMINI.md
+.codex/
+.agents/
+.claude/
+.cursor/
 
-# local scratch config (the binary reads ~/.config/tuipo/config.toml, not this)
+# Environment files and local credentials (including nested files).
+.env
+.env.*
+.secrets/
+secrets.toml
+secrets.json
+secrets.yaml
+secrets.yml
+*.local.toml
+*.local.json
+.git-credentials
+.netrc
+.npmrc
+.pypirc
+.aws/
+.ssh/
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+id_ecdsa
+id_ecdsa.*
+id_dsa
+id_dsa.*
+
+# Local configurations, personal material and drafts, not public examples.
 /config.toml
-RELEASING.md
-
-# marketing/launch drafts — local only
+/RELEASING.md
 /draft/
+/private/
+/personal/
+/pii/
 
-# macOS Finder metadata
+# Diagnostics, terminal histories, recordings, temporary files and caches.
+*.log
+*.tmp
+*.temp
+*.swp
+*.swo
+*.bak
+*~
+*.history
+.zsh_history
+.bash_history
+*.cast
+*.har
+*.trace
+*.core
+/core
+core.[0-9]*
+__pycache__/
+.pytest_cache/
+
+# macOS and editor metadata.
 .DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100/
+.Trashes/
+.fseventsd/
+.idea/
+.vscode/

@@ -1,72 +1,106 @@
-<div align="center">
+# tuipo-ru
 
-# tuipo
+Local Russian and English spelling support for selected terminal applications,
+with underlined mistakes and keyboard-driven corrections. The executable is still
+named **`tuipo`**. Russian uses Spellbook and a bundled LibreOffice Hunspell
+dictionary; English uses Harper. No cloud spelling service is used.
 
-**Grammarly for your terminal.**
+**Publication and automatic integration are blocked by the security review.**
+Known dependency vulnerabilities remain, and secret fields inside raw-mode TUIs
+cannot be reliably identified. This checkout is for evaluation, not a claim of
+safe use with confidential prompts. Read [SECURITY.md](SECURITY.md) and the
+[publication audit](docs/PUBLICATION_AUDIT.md) before running it.
 
-The red squiggly line from your editor — now for the prompts you type into Claude
-Code, Codex, Aider, and any other terminal app.
+[Русская документация](docs/README.ru.md) · [Architecture and manual checks](docs/RUSSIAN.md)
 
-[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
-[![Platform: macOS | Linux](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](#install)
-[![crates.io](https://img.shields.io/crates/v/tuipo.svg)](https://crates.io/crates/tuipo)
+> This project is based on Tuipo by ARahim3:
+> https://github.com/ARahim3/tuipo
+>
+> The original project is licensed under MIT OR Apache-2.0. This fork extends Tuipo with Russian spell-checking and additional keyboard-driven correction features.
 
-<img src="https://raw.githubusercontent.com/ARahim3/tuipo/main/tuipo_demo.gif" alt="tuipo underlining typos in a Claude Code prompt" width="720">
+## Features
 
-<sub><i>tuipo catching typos in a prompt to Claude Code. It never touches the app it's wrapping — the underlines are drawn on top.</i></sub>
+- Russian and US English enabled together, including ordinary Russian inflections.
+- Existing Tuipo underline rendering; plain underline in Terminal.app.
+- Background checking in a session-owned local subprocess.
+- Suggestions at the cursor, explicit confirmation and stale-result rejection.
+- Case-preserving Russian suggestions and common е/ё dictionary variants.
+- Custom exception dictionary and heuristic filtering of URLs, paths, flags and code.
+- Metadata-only diagnostics; no Tuipo input history or persistent text cache.
 
-</div>
+Examples: `работающие люди read English words` is checked without switching
+languages. In `превет world `, the Russian typo is underlined after a pause.
+Open the suggestions and select `привет`; the first candidate is not necessarily
+the intended word. Spellchecking cannot identify every real-word mistake.
 
-## Privacy and security
+## Build on macOS
 
-Spelling runs locally; Tuipo has no runtime telemetry, analytics or network client.
-The selected application (including Codex) keeps its own network and logging behavior.
-Opt-in `TUIPO_DEBUG_LOG` records only technical metadata, never prompt/terminal text,
-words, suggestions or tokens. Existing content logs from older builds are not erased.
-
-Canonical password input with echo disabled bypasses buffering, linting and key
-capture. Raw-mode TUI password fields cannot be reliably detected. For sensitive
-sessions, bypass all Tuipo processing:
-
-```sh
-TUIPO_PRIVATE=1 ./target/release/tuipo -- codex
-```
-
-This runs Codex directly; it does not change Codex's own privacy settings.
-Read [SECURITY.md](SECURITY.md) for the threat model, dependency findings and limits.
-
-## Russian + English fork
-
-This local fork keeps the CLI name `tuipo`. Both `ru_RU` and `en_US` are enabled
-by default: Harper checks English and Spellbook checks Russian using the bundled
-LibreOffice Hunspell dictionary, including inflections. No network service is
-used at runtime. Russian grammar is outside the scope of this version.
-
-From the repository:
+Rust and Cargo are required. This checkout has been tested on macOS 27 ARM64 with
+Rust 1.99.1. Build from the existing source directory:
 
 ```sh
-cargo build --release
+cargo build --locked --release
 ./target/release/tuipo -- codex
-# or wrap an interactive shell
-./target/release/tuipo -- zsh
 ```
 
-After typing `превет world `, wait briefly, then move the cursor into `превет`
-or directly after its last letter. **Ctrl+N** opens suggestions; repeated
-**Ctrl+N / Ctrl+P** cycle in either direction. **Enter** confirms; **Escape**
-closes without editing. Opening and cycling never alter text. Ctrl+P opens at
-the last suggestion. Typing dismisses stale suggestions. Tab keeps its original
-behavior unless the existing `tab_fix` / `picker` options are enabled.
+Run that command in Terminal.app. It wraps only this Codex invocation. Ordinary
+commands in other terminal sessions are not intercepted. There is no macOS global
+keyboard listener, Accessibility/Input Monitoring integration, LaunchAgent or daemon.
 
-Keys pass through when no fresh issue, usable replacement or safe menu position
-is available. The first key during engine startup may therefore reach the host;
-wait for the underline before retrying. Host shortcuts necessarily conflict
-while a spelling menu is active. Full Codex / Zsh key compatibility and visual
-behavior in Terminal.app still require the [manual checks](docs/RUSSIAN.md).
-Terminal.app uses the existing plain underline automatically.
+After the security gate is resolved, a local Cargo installation would be:
 
-Configuration remains in `$XDG_CONFIG_HOME/tuipo/config.toml`, otherwise
-`~/.config/tuipo/config.toml`. All old options remain supported:
+```sh
+cargo install --path . --locked
+```
+
+That installs the `tuipo` executable into Cargo's bin directory. It does not install
+shell integration. No public fork or release has been published during this review.
+The package's original repository metadata remains upstream until publication is
+approved; do not mistake the upstream releases for builds of this fork.
+
+## Correct a word
+
+1. Finish a word with a separator and wait briefly for its underline.
+2. Move the cursor inside the typo or immediately after its last letter.
+3. Press Ctrl+N, choose a candidate, and press Enter.
+
+| Key | Action |
+| --- | --- |
+| Ctrl+N | Open suggestions / select next, cyclically |
+| Ctrl+P | Open at the last candidate / select previous, cyclically |
+| Enter | Apply the selected candidate |
+| Escape | Close without editing |
+
+Opening and cycling never change text. Enter applies only while a menu is engaged;
+submit the prompt separately. A shortcut passes to the app if the result is stale,
+there are no useful suggestions, or the menu cannot be positioned safely. The first
+shortcut during engine startup can therefore reach Codex. Tab retains completion
+unless the existing `tab_fix` or legacy `picker` option is explicitly enabled.
+
+## On, off and status
+
+From this checkout:
+
+```sh
+./target/release/tuipo on
+./target/release/tuipo status
+./target/release/tuipo off
+```
+
+`on` permits checking on **subsequent explicit app launches**. It starts no service,
+installs no hook and does not bypass the automatic-integration security gate.
+`off` makes new invocations execute the selected app directly. A running wrapper
+switches to byte forwarding without spelling buffers, screen reconstruction or
+shortcut capture. Once disabled, that wrapper stays forwarding-only until the app
+exits. Use `on` and restart Codex to resume checking with fresh screen state.
+`status` reports the configured mode and the blocked automatic-integration gate.
+These commands do not inspect other terminal sessions.
+
+## Configuration
+
+Malformed or unreadable settings bypass checking with a content-free warning;
+an absent file uses defaults. Settings are read at startup from `$XDG_CONFIG_HOME/tuipo/config.toml`, otherwise
+`~/.config/tuipo/config.toml`. Existing Tuipo options remain supported:
 
 ```toml
 languages = ["ru_RU", "en_US"]
@@ -75,280 +109,98 @@ highlight_only = false
 next_key = "ctrl+n"
 previous_key = "ctrl+p"
 pause_ms = 150
-underline = "auto"
-# Optional UTF-8 Hunspell pair (both should be supplied together):
+underline = "auto" # plain in Terminal.app; or force "plain"
+grammar = false    # optional narrow English rules; no Russian grammar
+# Legacy features, off by default:
+tab_fix = false
+picker = false
+status_row = false
+hover_ms = 250
+# Optional UTF-8 dictionary pair; supply both together:
 # russian_aff_path = "/absolute/path/ru_RU.aff"
 # russian_dic_path = "/absolute/path/ru_RU.dic"
-# One exception per line; # comments allowed, case-insensitive:
+# Exceptions: one word per line, # comments, case-insensitive:
 # dict_path = "~/my-tuipo-dict.txt"
 ```
 
-`interactive = false` disables the new shortcuts. `highlight_only = true` also
-disables the legacy Tab correction and hover picker. Configurable keys use
-`ctrl+a` through `ctrl+z`; avoid keys such as Ctrl+C, Ctrl+I (Tab), Ctrl+M (Enter)
-and Ctrl+[ used by the terminal. Settings are read at startup. The configuration
-TUI preserves the new settings; edit the TOML to change them.
+Set `interactive = false` to disable the new keys, or `highlight_only = true` to
+also disable legacy interactive correction. Keys accept `ctrl+a` through `ctrl+z`;
+avoid Enter, Tab, interrupt and other important application bindings. The config
+TUI preserves the new settings, but they must be edited in TOML.
 
-The dictionary accepts common е/ё variants without changing the text automatically;
-explicit ё stays meaningful. Unknown names, new slang and words distinguished only
-by context may need exceptions. URLs, paths, flags, common CLI names, identifiers
-and backtick code are filtered heuristically; arbitrary shell commands cannot
-always be distinguished from prose.
+Turning off painting or choosing highlight-only does **not** stop text processing.
+For a session with no Tuipo processing from the start:
 
-See [implementation, limitations and manual tests](docs/RUSSIAN.md).
-The original project's documentation follows; its default-off picker statements
-refer to the legacy hover/Tab picker, not the new explicit shortcuts.
-
-## Why I made this
-
-I type a lot of prose into terminal apps — long prompts for **Claude Code**, **Codex** and other
-AI agents, commit messages, SQL, quick notes. None of them spell-check, so my typos
-just sail straight through into prompts and history. My editor has had the red
-squiggly line for years; my terminal never got it.
-
-So I built it. You wrap a terminal program once, and you get that squiggly line
-back — in Claude Code, Aider, Codex, vim, `psql`, your shell, whatever. It only
-shows up when you actually misspell something, and it never changes how the app
-you're running behaves.
-
-To be fair: modern LLMs shrug off everyday typos — mistype "recieve" and Claude
-knows what you meant. But that robustness comes from the model having seen a word
-(and its common misspellings) countless times, so it fades exactly where the
-stakes are highest: rare words, names, and jargon, where the model quietly
-guesses — and an agent doesn't ask, it acts on its guess. It shrinks with model
-size, too: what a frontier model shrugs off, the local Qwen or Gemma behind your
-coding agent has to guess at. Spelling also outlives the prompt: agents echo
-your words into commit messages, PR text, comments, and docs. And plenty of what you type in a terminal is read by humans in the first
-place — commit messages, SQL, notes — where a typo just stays a typo.
-
-A few things I cared about while building it:
-
-- **It stays invisible until you need it.** Nothing pops up while you type; the
-  underline appears in the small pause *after* you stop, which is when your eyes are
-  actually scanning back over the line.
-- **It never gets in the app's way.** tuipo sits between your keystrokes and the
-  program and draws on top of the screen — it never rewrites what the app prints.
-  The wrapped app behaves exactly as if you'd run it directly.
-- **It only nags about real words.** Code-shaped tokens (`snake_case`, `--flags`,
-  `paths/like/this`, `CamelCase`, backtick spans, numbers) are skipped, so it
-  underlines your sentences, not your identifiers.
-- **It's quiet by default.** Out of the box you get spelling underlines and nothing
-  else. Grammar hints, the suggestion picker, Tab-to-fix — all off until you turn
-  them on from `config`.
-
-## Install
-
-```bash
-# Homebrew (macOS & Linux)
-brew install ARahim3/tuipo/tuipo
-# If Homebrew refuses the tap ("untrusted tap"), trust it once:
-#   brew trust ARahim3/tuipo
-
-# or with cargo (--locked builds against the tested dependency versions)
-cargo install tuipo --locked
-
-# or the shell installer (URL is in each release's notes)
-curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/ARahim3/tuipo/releases/latest/download/tuipo-installer.sh | sh
+```sh
+TUIPO_PRIVATE=1 ./target/release/tuipo -- codex
 ```
 
-<details>
-<summary>From source</summary>
+This executes Codex directly without a Tuipo PTY, buffer, engine or debug file.
+SSH-marked and nested wrapper launches also bypass processing. This does not change
+Codex's own network requests, history or retention settings.
 
-```bash
-git clone https://github.com/ARahim3/tuipo
-cd tuipo
+## Privacy and limitations
+
+Spelling stays on the machine; telemetry and transmission of text by Tuipo are
+prohibited. Optional `TUIPO_DEBUG_LOG` contains technical metadata only. Tuipo does
+not save prompts, suggestions or terminal transcripts. Older content logs and the
+selected application's own files are not erased or controlled by this fork.
+
+Canonical no-echo password entry bypasses checking. Raw-mode password/token fields
+and secrets typed as ordinary prose cannot be reliably distinguished. Do not use
+automatic wrapping for those scenarios. No shell function is installed or offered
+for activation while this limitation and dependency findings remain unresolved.
+See [the integration design and gate](docs/INTEGRATION.md).
+
+Other known limits include custom editor bindings/history, crowded Codex footers,
+redraw races, wrapped menus and complex Unicode graphemes. Combining sequences,
+emoji and wide characters inside input conservatively disable correction and
+input overlays. Earlier pasted lines are not corrected. Hostile app escape output
+is forwarded unchanged. Visual behavior in native Terminal.app and an interactive
+Codex session has not been verified by this audit.
+
+## Tests and dependency audit
+
+```sh
+cargo fmt --check
+cargo test
+cargo clippy --all-targets -- -D warnings
 cargo build --release
-# binary at ./target/release/tuipo
-```
-</details>
-
-## Getting started
-
-### Run only the selected application
-
-This fork disables shell-hook installation, services and autostart. Launch only
-the application you want to wrap:
-
-```bash
-tuipo -- claude
-tuipo -- aider
-tuipo -- psql mydb
-tuipo -- bash
+python3 scripts/check-local-policy.py
+python3 scripts/audit-repository.py
 ```
 
-Anything after `--` is the command tuipo wraps, run exactly as you normally would.
+The last script reports paths/rule names without printing matching secret values;
+it is a heuristic, not proof of no secrets. It intentionally fails on unresolved
+historical metadata findings. Cargo.lock is committed; use `--locked` for reproducible
+resolution. See [validation](docs/VALIDATION.md) and [RustSec results](docs/dependency-audit.json).
+The dependency audit currently fails; findings are not hidden with ignore rules.
+The inherited release workflow and upstream Homebrew publication configuration
+have been removed. There is no automated publishing pipeline in this fork.
 
-## Settings
+## Disable and uninstall
 
-tuipo is intentionally minimal by default. Turn on more when you want it:
+Run `tuipo off` to stop processing in running wrappers and bypass subsequent launches.
+For immediate termination of the proxy, exit the selected app. Launch Codex directly
+with `codex` afterward. No shell/LaunchAgent cleanup is needed for this review:
+no integration has been installed, and `tuipo init` refuses installation.
 
-```bash
-tuipo config           # interactive settings editor
-tuipo config --print   # print current settings as TOML
-tuipo config --path    # show where the config file lives
-```
+If you installed this checkout with Cargo, use `cargo uninstall tuipo`. If you only
+ran `target/release/tuipo`, there is no installed program to remove. You may manually
+remove Tuipo's config directory and any debug file you explicitly selected after
+reviewing them. Earlier versions' manually installed hooks require removing their
+exact definitions from your own shell configuration; this fork does not rewrite
+user files or delete unrelated functions/settings.
 
-Settings live in `~/.config/tuipo/config.toml` (all keys optional):
+## Libraries, dictionaries and licensing
 
-| Key          | Default  | What it does                                                       |
-|--------------|----------|--------------------------------------------------------------------|
-| `paint`      | `true`   | The inline underline overlay. Turn off to make tuipo do nothing.   |
-| `underline`  | `"auto"` | Underline style: `auto`, `plain`, or `fancy` (curly red).          |
-| `tab_fix`    | `false`  | Tab fixes the most recent misspelling with the top suggestion.     |
-| `picker`     | `false`  | Pick among suggestions inline (hover tooltip + Tab).               |
-| `grammar`    | `false`  | A small, careful set of grammar hints on top of spelling (below).  |
-| `status_row` | `false`  | A little issue-count line at the bottom.                           |
-| `pause_ms`   | `150`    | How long you have to pause before underlines show up.              |
-| `hover_ms`   | `250`    | Idle time before the picker tooltip appears.                       |
-| `dict_path`  | —        | Path to your own word list (one word per line).                    |
+Tuipo's source remains **MIT OR Apache-2.0**; [LICENSE-MIT](LICENSE-MIT) and
+[LICENSE-APACHE](LICENSE-APACHE) and original credits are retained. Harper is
+Apache-2.0; Spellbook is MPL-2.0. The Russian dictionary has a separate permissive
+license from Alexander I. Lebedev, with a documented modification by Laszlo Nemeth.
+Redistributions must include its notice. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+and [dictionary provenance](assets/ru_RU/SOURCE.md).
 
-Got project names or jargon that keep getting flagged? Drop them in
-`~/.config/tuipo/dict.txt`, one per line.
-
-Every setting also has an env-var override for one-off sessions (env wins over the
-file) — e.g. `TUIPO_PAINT_OFF=1`, `TUIPO_TAB_FIX=1`, `TUIPO_GRAMMAR=1`. Run
-`tuipo --help` for the full list.
-
-## What about grammar?
-
-Spelling is the default, along with a few slips that are never intentional: doubled
-words ("the the"), the wrong article ("an new", "a hour"), and "could of" / "should
-of". Grammar is opt-in and kept deliberately small. Terminal prompts aren't essays —
-they're full of imperatives, lowercase starts, fragments, and no end punctuation, so
-broad grammar checking misfires constantly. With `grammar = true`, tuipo surfaces
-only a narrow, high-confidence slice (subject–verb agreement, malapropisms,
-eggcorns, mixed-up their/they're, then/than, its/it's, lets/let's, and common usage
-slips) and leaves the noisy stuff off. It's tuned for how people actually type in a
-terminal, not lifted from a desktop grammar checker.
-
-## How it works
-
-tuipo opens a pseudo-terminal, runs your command inside it, and passes bytes both
-ways. On the way in, it reconstructs what you've typed and runs it through the
-open-source [Harper](https://github.com/Automattic/harper) checker. On the way out,
-it watches the screen the app draws so it can place each underline exactly under the
-flagged word — using only relative cursor moves, so it never messes with scrollback
-or the app's layout. When you pause, it paints. If you ask it to fix something, it
-"types" the correction into the app's input (backspaces + the replacement), so the
-app reacts as if you'd typed it yourself. The app is never modified and never sees
-anything unusual.
-
-## A few things you might wonder
-
-**Does it slow down or interfere with the app I'm wrapping?**
-No. Passthrough is byte-for-byte and the app behaves exactly as if you launched it
-directly. Painting only happens during idle pauses, when the app is idle too.
-
-**How much memory does it use?**
-About 2 MB per terminal while you're not typing. The spell checker (Harper and its
-dictionary, ~130–200 MB) runs in a helper process, `tuipo __engine`, that starts
-when you begin typing and exits about a minute after you stop — so a pile of open
-terminals costs almost nothing. `TUIPO_ENGINE_IDLE_SECS` changes the delay.
-
-**Will it mess with tab-completion or my keybindings?**
-No. Tab passes straight through to the app by default, so shell completion, vim
-indent, and slash-command menus keep working. Fixing is opt-in, and even then it
-stays out of the way while you're typing forward.
-
-**Which terminals work?**
-macOS and Linux. You get curly red underlines where the terminal supports them, with
-an automatic fallback to a plain underline where it doesn't (e.g. Apple Terminal).
-
-**Does it work with non-English text?**
-Not yet — Harper, the engine underneath, is English-only today. Words from other
-languages in the same alphabet ("ragazzo", "bonjour") will usually get underlined
-as unknown, though loanwords English has absorbed ("croissant", "rendezvous") pass
-clean. The underline is passive — nothing is blocked or changed — and words you mix
-in regularly can go in `~/.config/tuipo/dict.txt` so they're never flagged again.
-If Harper grows other languages, tuipo inherits them.
-
-**How do I turn it off for a bit?**
-`tuipo off`, then `tuipo on` when you want it back. To keep tuipo running but hide
-the underlines, set `paint = false` (or start one session with
-`TUIPO_PAINT_OFF=1 tuipo -- <cmd>`).
-
-## Uninstall
-
-Nothing here is sticky:
-
-```bash
-# 1. if you ran `tuipo init`, delete the hook line from your shell rc
-#    (~/.zshrc or ~/.bashrc) — it's the single line containing TUIPO_ACTIVE
-# 2. remove the binary
-brew uninstall tuipo
-brew untap ARahim3/tuipo      # optional: drop the tap too
-# 3. optional: remove your settings + custom dictionary
-rm -rf ~/.config/tuipo
-```
-
-If you skip step 1, no harm done — the hook is guarded (`[[ -x … ]]`), so once the
-binary is gone it simply does nothing. Deleting the line just tidies up the file.
-
-## Contributing
-
-Issues and PRs welcome. `cargo build`, `cargo test`, and please keep
-`cargo clippy --all-targets -- -D warnings` clean before opening a PR.
-
-## Credits
-
-Spell and grammar checking is powered by [Harper](https://github.com/Automattic/harper).
-Built in Rust with [portable-pty](https://crates.io/crates/portable-pty),
-[vte](https://crates.io/crates/vte), and [crossterm](https://crates.io/crates/crossterm).
-
-## License
-
-Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), your choice.
-Unless you say otherwise, anything you contribute is licensed the same way.
-
----
-
-<sub>tuipo is an independent project and isn't affiliated with, endorsed by, or sponsored by Grammarly, Anthropic (Claude), or anyone else mentioned here. Those names are only used to describe what tuipo works with, or — for "Grammarly for your terminal" — to give a quick feel for what it does. It's not the same engine or feature set. All trademarks belong to their owners.</sub>
-
-## Bundled Russian dictionary license
-
-The following notice also applies to binary distributions containing the bundled Russian dictionary.
-
-```text
-* Copyright (c) 1997-2008, Alexander I. Lebedev
-
-Modifications:
-------------------------------------------------------------------
-2012-08-24: Laszlo Nemeth (nemeth at numbertext org)
-* ru_RU.aff: add TRY line for better suggestions
-  (fix fdo#35001, reported by sasha.libreoffice at gmail)
-
-Copyright:
-------------------------------------------------------------------
-* Copyright (c) 1997-2008, Alexander I. Lebedev
-
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-* Redistributions of source code must retain the above copyright
-  notice, this list of conditions and the following disclaimer.
-* Redistributions in binary form must reproduce the above copyright
-  notice, this list of conditions and the following disclaimer in the
-  documentation and/or other materials provided with the distribution.
-* Modified versions must be clearly marked as such.
-* The name of Alexander I. Lebedev may not be used to endorse or promote
-  products derived from this software without specific prior written
-  permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
-```
-
-Spellbook is MPL-2.0; see [third-party sources and licenses](assets/ru_RU/SOURCE.md).
+Thanks to ARahim3 for the original PTY, rendering, buffering, picker and correction
+architecture, and to the Harper, Spellbook and LibreOffice dictionary contributors.
+This fork does not claim authorship of the original Tuipo implementation.

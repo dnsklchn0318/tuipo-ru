@@ -6,7 +6,7 @@ second input buffer, cloud spellchecker or Russian grammar engine.
 | Component | Decision |
 | --- | --- |
 | `spell.rs` | Keep Harper's English rules/ranking; route Russian spans to Spellbook 0.4.2 with the pinned LibreOffice UTF-8 aff/dic pair. Suppress Harper lints touching Russian. Share the parsed bundled Russian dictionary once per process. Disable expensive n-gram suggestions, retain ordinary Hunspell edit suggestions. |
-| `engine.rs`, `lint_worker.rs` | Retain framed subprocess protocol, async snapshots, epoch/stale-result rejection, lifecycle and in-process fallback. Engine now loads the same TOML config. Dictionary exceptions remain on the client. |
+| `engine.rs`, `lint_worker.rs` | Retain framed subprocess protocol, async snapshots, epoch/stale-result rejection, lifecycle and failure handling. Engine now loads the same TOML config. Dictionary exceptions remain on the client. |
 | `buffer.rs`, `input.rs` | Reuse byte-boundary cursor, UTF-8 assembly, scalar arrow/Backspace handling, bracketed/burst paste and snapshot model. |
 | `pty.rs` | Add configurable completion keys; use only immediately available exact-text lints. Renderer shares menu eligibility for exact text/cursor. Preserve PTY forwarding on failure. Dismiss selection on editing/paste and invalidate on resize. Emit complete Unicode echo events. |
 | `picker.rs` | Reuse cyclic selection, Enter/Escape and overlay restore. Carry exact span offsets to distinguish repeated words. Reject wrapped/ambiguous placement and occupied overlay cells. |
@@ -97,3 +97,12 @@ licenses, provided their separate notices and redistribution terms are retained.
 Ship README and `assets/ru_RU` notices with binary release artifacts. No upstream
 license or author attribution was removed. Spellbook source is available through
 its Cargo package and the linked upstream repository.
+
+## Updated operating mode
+
+See [README](../README.md), [SECURITY](../SECURITY.md) and
+[the publication audit](PUBLICATION_AUDIT.md) for the current controls. `off` now
+ends input/screen reconstruction in a running proxy permanently until app exit;
+`on` affects the next explicit launch. SSH and nested launches bypass processing.
+Persistent engine failure disables checking instead of falling back in-process.
+Automatic Codex integration and publication remain blocked.

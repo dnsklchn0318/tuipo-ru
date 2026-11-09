@@ -74,6 +74,14 @@ impl InputState {
         }
     }
 
+    pub fn set_processing(&self, enabled: bool) {
+        match &self.lints {
+            Lints::Worker(handle) => handle.switch().set(enabled),
+            #[cfg(test)]
+            Lints::Inline(_) => {}
+        }
+    }
+
     /// Toggle the chunk-level paste flag on the underlying buffer. Set
     /// by the stdin pump (`pty::pump_stdin_to_pty`) before iterating
     /// the bytes of a paste-shaped read chunk and cleared after, so
@@ -95,6 +103,10 @@ impl InputState {
     /// `InputEvent::Boundary` to the render loop — see
     /// [`LintHandle::boundary`] for why that send lives there.
     pub fn feed_bytes(&mut self, bytes: &[u8]) -> FeedOutcome {
+        if !self.lints_enabled() {
+            self.discard_input();
+            return FeedOutcome::NoChange;
+        }
         let outcome = self.buffer.feed_bytes(bytes);
         match outcome {
             FeedOutcome::Updated => self.buffer_changed(),
@@ -121,6 +133,10 @@ impl InputState {
     /// immediately — cheap, and keeps invariants intact if a control byte
     /// happens to land inside a pasted chunk.
     pub fn feed_bytes_deferred(&mut self, bytes: &[u8]) -> FeedOutcome {
+        if !self.lints_enabled() {
+            self.discard_input();
+            return FeedOutcome::NoChange;
+        }
         let outcome = self.buffer.feed_bytes(bytes);
         if let FeedOutcome::Boundary = outcome {
             self.issues.clear();
@@ -279,5 +295,36 @@ mod tests {
             !words.is_empty(),
             "expected at least one misspelling for `wirte a paragprah`, got none",
         );
+    }
+}
+
+#[cfg(test)]
+mod disabled_processing_tests {
+    use super::*;
+    use crate::lint_worker::{EngineMode, WorkerConfig};
+    #[test]
+    fn disabled_input_and_paste_never_enter_the_spelling_buffer() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let handle = LintHandle::spawn_with(
+            tx,
+            crate::dict::CustomDict::empty(),
+            WorkerConfig {
+                mode: EngineMode::InProcess,
+                idle: Duration::from_secs(1),
+            },
+        );
+        let switch = handle.switch();
+        let mut state = InputState::new(handle);
+        state.feed_bytes(b"teh visible");
+        switch.set(false);
+        assert!(!switch.enabled());
+        state.feed_bytes(b"passwordCanary_37");
+        state.feed_bytes_deferred("секретCanary_95".as_bytes());
+        state.refresh();
+        assert!(state.buffer().is_empty());
+        assert!(state.issues().is_empty());
+        switch.set(true);
+        state.feed_bytes(b"fresh");
+        assert_eq!(state.buffer().text(), "fresh");
     }
 }

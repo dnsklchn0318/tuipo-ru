@@ -134,21 +134,38 @@ impl Default for Config {
 
 impl Config {
     /// Load from the user's config path. Missing file → defaults. Parse
-    /// error → defaults + a one-line warning to stderr (the wrapped
-    /// child's stderr is `Stdio::inherit` so the user sees it).
+    /// or read error → disabled input processing + a content-free warning.
+    /// A missing file alone uses the documented defaults.
     pub fn load() -> Self {
         let Some(path) = default_config_path() else {
             return Self::default();
         };
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            return Self::default();
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Self::default(),
+            Err(_) => {
+                eprintln!("tuipo: configuration unavailable; input processing disabled");
+                return Self::disabled();
+            }
         };
         match toml::from_str::<Config>(&text) {
             Ok(cfg) => cfg,
-            Err(err) => {
-                eprintln!("tuipo: warning — could not parse {}: {err}", path.display());
-                Self::default()
+            Err(_) => {
+                eprintln!(
+                    "tuipo: invalid configuration; input processing disabled (contents suppressed)"
+                );
+                Self::disabled()
             }
+        }
+    }
+
+    fn disabled() -> Self {
+        Self {
+            languages: Vec::new(),
+            paint: false,
+            interactive: false,
+            highlight_only: true,
+            ..Self::default()
         }
     }
 
@@ -286,7 +303,26 @@ pub fn off_switch_path() -> Option<PathBuf> {
 
 /// Whether `tuipo off` is in effect.
 pub fn switched_off() -> bool {
-    off_switch_path().is_some_and(|path| path.exists())
+    match off_switch_path() {
+        Some(path) => match std::fs::symlink_metadata(path) {
+            Ok(_) => true,
+            Err(err) => err.kind() != std::io::ErrorKind::NotFound,
+        },
+        None => true,
+    }
+}
+
+/// Only inspect the presence of relevant flags, never their values.
+pub fn restricted_launch() -> bool {
+    [
+        "TUIPO_PRIVATE",
+        "TUIPO_ACTIVE",
+        "SSH_CONNECTION",
+        "SSH_CLIENT",
+        "SSH_TTY",
+    ]
+    .iter()
+    .any(|key| std::env::var_os(key).is_some())
 }
 
 impl Config {

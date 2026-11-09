@@ -1,0 +1,32 @@
+{
+  "scope": "working tracked files and blobs reachable from local refs; no remote scan",
+  "method": "known credential signatures, forbidden paths and local home paths; no entropy or manual visual proof",
+  "reviewed_head": "0d00beec17dbdf79fcaaa01a08fe3bbe02918081",
+  "commits": 14,
+  "candidate_paths": 50,
+  "historical_blobs": 119,
+  "current_findings": [],
+  "historical_findings": [
+    {
+      "object": "ec0d1546feeebc3b8af84b07f29c73a6f058f5d9",
+      "path": "docs/VALIDATION.md",
+      "rules": [
+        "local-home-path"
+      ]
+    },
+    {
+      "object": "3f23d1979176cb65f491f771e7aceee14ed3aa59",
+      "path": "docs/VALIDATION.md",
+      "rules": [
+        "local-home-path"
+      ]
+    },
+    {
+      "object": "add94b8478e60a8d5b0eb7764793de8b632b5288",
+      "path": ".DS_Store",
+      "rules": [
+        "historical-local-file"
+      ]
+    }
+  ]
+}

@@ -54,6 +54,9 @@ fn main() {
     if argv.first().map(String::as_str) == Some("on") {
         std::process::exit(init::run_on());
     }
+    if argv.first().map(String::as_str) == Some("status") {
+        std::process::exit(init::run_status());
+    }
     if argv.first().map(String::as_str) == Some("config") {
         // Config is loaded inside the TUI from the file directly, so we
         // intentionally do NOT call `config::load_global()` for this
@@ -69,21 +72,24 @@ fn main() {
         std::process::exit(0);
     }
     let args = Args::parse();
-    if std::env::var_os("TUIPO_PRIVATE").is_some() || config::switched_off() {
+    if config::restricted_launch() || config::switched_off() {
         run_unwrapped(&args.command);
     }
     // Load the persistent config once, before any thread starts. Env vars
     // still override individual settings — see `config::Config` for the
     // precedence rules.
     config::load_global();
-    if let Err(err) = config::get().validate_spelling() {
-        eprintln!("tuipo: invalid spelling configuration: {err:#}");
+    if config::get().languages.is_empty() {
+        run_unwrapped(&args.command);
+    }
+    if config::get().validate_spelling().is_err() {
+        eprintln!("tuipo: invalid spelling configuration; refusing to start checking");
         std::process::exit(1);
     }
     match pty::run(args.command) {
         Ok(code) => std::process::exit(code),
-        Err(err) => {
-            eprintln!("tuipo: {err:#}");
+        Err(_) => {
+            eprintln!("tuipo: could not start PTY or selected application (details suppressed)");
             std::process::exit(1);
         }
     }
@@ -98,7 +104,10 @@ fn run_unwrapped(command: &[String]) -> ! {
         .args(&command[1..])
         .env("TUIPO_ACTIVE", "1")
         .exec();
-    eprintln!("tuipo: failed to run `{}`: {err}", command[0]);
+    eprintln!(
+        "tuipo: selected application could not start ({:?})",
+        err.kind()
+    );
     std::process::exit(127);
 }
 
@@ -107,9 +116,10 @@ fn print_help() {
     println!("USAGE:");
     println!("  tuipo -- <command> [args...]    Wrap a command under tuipo");
     println!("  tuipo init                      Disabled: use explicit per-app launch");
-    println!("  tuipo off                       Switch tuipo off: open tabs stop underlining,");
-    println!("                                   new tabs start without it");
-    println!("  tuipo on                        Switch it back on");
+    println!("  tuipo off                       Disable processing in running wrappers;");
+    println!("                                   new launches bypass the wrapper");
+    println!("  tuipo on                        Enable checking for subsequent launches");
+    println!("  tuipo status                    Show mode and automatic-integration gate");
     println!("  tuipo config                    Interactive TUI to edit settings");
     println!("  tuipo config --print            Print current config as TOML");
     println!("  tuipo config --path             Print the config file path");

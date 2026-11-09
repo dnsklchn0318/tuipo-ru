@@ -402,7 +402,7 @@ fn cycle_underline(mode: UnderlineMode, direction: i32) -> UnderlineMode {
     order[next as usize]
 }
 
-/// Atomic write: write to `<path>.tmp`, then rename. Guarantees the
+/// Atomic write: create a new private temporary file, then rename. The
 /// file is either fully old or fully new — a crash mid-write can't
 /// leave the user with a corrupt half-config.
 fn write_atomic(path: &PathBuf, content: &str) -> Result<(), String> {
@@ -411,9 +411,26 @@ fn write_atomic(path: &PathBuf, content: &str) -> Result<(), String> {
     {
         std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
-    let tmp = path.with_extension("toml.tmp");
-    std::fs::write(&tmp, content).map_err(|e| format!("write {}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, path).map_err(|e| format!("rename to {}: {e}", path.display()))?;
+    use std::os::unix::fs::OpenOptionsExt;
+    static TEMP_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = TEMP_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = path.with_extension(format!("toml.{}.{sequence}.tmp", std::process::id()));
+    // create_new refuses an existing regular file or symlink. Never truncate
+    // another file; a stale collision is an error, not permission to overwrite.
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&tmp)
+        .map_err(|e| format!("create private temporary configuration: {e}"))?;
+    let result = file
+        .write_all(content.as_bytes())
+        .and_then(|()| file.sync_all())
+        .and_then(|()| std::fs::rename(&tmp, path));
+    if let Err(err) = result {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("save configuration: {err}"));
+    }
     Ok(())
 }
 
@@ -869,5 +886,28 @@ mod tests {
         let read = std::fs::read_to_string(&path).expect("read");
         assert_eq!(read, "paint = false\n");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod private_save_tests {
+    use super::*;
+    #[test]
+    fn saves_private_configuration_without_following_legacy_temp_symlink() {
+        use std::os::unix::fs::{MetadataExt, symlink};
+        let dir = std::env::temp_dir().join(format!("tuipo-config-private-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = dir.join("config.toml");
+        let other = dir.join("untouched");
+        std::fs::write(&other, "other-file-canary").unwrap();
+        symlink(&other, config.with_extension("toml.tmp")).unwrap();
+        write_atomic(&config, "paint = false\n").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&other).unwrap(),
+            "other-file-canary"
+        );
+        assert_eq!(config.metadata().unwrap().mode() & 0o777, 0o600);
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), "paint = false\n");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

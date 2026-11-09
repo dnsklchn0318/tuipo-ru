@@ -32,11 +32,10 @@
 //! `Stopped` → spawn on demand → `Starting` → hello → `Ready` → idle for
 //! [`DEFAULT_IDLE`] (`TUIPO_ENGINE_IDLE_SECS`) → `Stopped`. After
 //! [`RECYCLE_AFTER`] requests the engine restarts at the next `Boundary`
-//! (Enter), which caps harper's LRU caches — over a long session they
-//! otherwise add ~70 MB. If the engine can't be spawned, speaks another
-//! protocol, or keeps dying, the worker falls back to running harper on
-//! this thread (`TUIPO_ENGINE=inprocess` forces that): the old memory
-//! profile, but still off the stdin path.
+//! (Enter), which caps harper's LRU caches. If the engine cannot be started,
+//! speaks an incompatible protocol or repeatedly fails, checking is disabled
+//! for this session and the PTY keeps forwarding bytes. There is no production
+//! in-process fallback; deterministic worker tests use one internally.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -71,7 +70,7 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
 /// An engine still on one request after this long is presumed wedged.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Unexpected engine failures in a row before linting moves in-process.
+/// Unexpected engine failures in a row before checking is disabled.
 const MAX_CRASHES: u32 = 3;
 
 /// Buffers bigger than this aren't linted (a pasted log file, say):
@@ -87,7 +86,8 @@ fn lintable(text: &str) -> bool {
 pub enum EngineMode {
     /// harper runs in a `tuipo __engine` child process. The default.
     Subprocess,
-    /// harper runs on the worker thread (`TUIPO_ENGINE=inprocess`).
+    /// Internal deterministic test mode; never selected by production configuration.
+    #[allow(dead_code)] // Constructed only by deterministic worker tests.
     InProcess,
 }
 
@@ -100,10 +100,7 @@ pub struct WorkerConfig {
 
 impl WorkerConfig {
     pub fn from_env() -> Self {
-        let mode = match std::env::var("TUIPO_ENGINE") {
-            Ok(v) if v.trim().eq_ignore_ascii_case("inprocess") => EngineMode::InProcess,
-            _ => EngineMode::Subprocess,
-        };
+        let mode = EngineMode::Subprocess;
         let idle = std::env::var("TUIPO_ENGINE_IDLE_SECS")
             .ok()
             .and_then(|s| parse_idle(&s))
@@ -215,7 +212,11 @@ impl LintHandle {
         if !self.enabled() {
             return;
         }
-        let epoch = self.shared.lock().epoch;
+        let state = self.shared.lock();
+        if !self.enabled() {
+            return;
+        }
+        let epoch = state.epoch;
         let _ = self.tx.send(WorkerMsg::Update {
             epoch,
             text: text.to_owned(),
@@ -251,6 +252,9 @@ impl LintHandle {
         let deadline = Instant::now() + timeout;
         let mut state = self.shared.lock();
         loop {
+            if !self.enabled() {
+                return Some(Vec::new());
+            }
             if let Some(snap) = &state.latest
                 && snap.text == text
             {
@@ -285,9 +289,19 @@ pub struct LintSwitch {
 }
 
 impl LintSwitch {
+    pub fn enabled(&self) -> bool {
+        self.shared.enabled.load(Ordering::Relaxed)
+    }
+
     pub fn set(&self, on: bool) {
+        let mut state = self.shared.lock();
         if self.shared.enabled.swap(on, Ordering::Relaxed) != on {
+            if !on {
+                state.epoch = state.epoch.wrapping_add(1);
+                state.latest = None;
+            }
             let _ = self.tx.send(WorkerMsg::Enabled(on));
+            self.shared.published.notify_all();
         }
     }
 }
@@ -493,6 +507,9 @@ impl Worker {
                 self.want = None;
                 self.published = None;
                 self.stop_engine("off");
+                self.engine = Engine::Stopped;
+                self.poisoned = None;
+                self.retry_at = None;
             }
             WorkerMsg::Shutdown => {}
         }
@@ -590,7 +607,7 @@ impl Worker {
                     }
                     self.retry_at = None;
                     self.start_engine();
-                    // A failed spawn falls back to in-process: go round
+                    // A failed spawn disables checking: go round
                     // again and check the text right away.
                     if !matches!(self.engine, Engine::InProcess(_)) {
                         return;
@@ -669,7 +686,7 @@ impl Worker {
             EngineEvent::Reply { id, issues } => self.on_reply(id, issues),
             EngineEvent::Incompatible => {
                 self.kill_engine();
-                self.fall_back("incompatible engine");
+                self.disable_checking("incompatible engine");
             }
             EngineEvent::Exited => self.engine_failed("exited unexpectedly"),
         }
@@ -706,7 +723,7 @@ impl Worker {
         } = want;
         {
             let mut state = self.shared.lock();
-            if state.epoch != epoch {
+            if state.epoch != epoch || !self.shared.enabled.load(Ordering::Relaxed) {
                 return;
             }
             state.latest = Some(Snapshot {
@@ -753,7 +770,7 @@ impl Worker {
                     since: Instant::now(),
                 };
             }
-            Err(_) => self.fall_back("spawn failed"),
+            Err(_) => self.disable_checking("spawn failed"),
         }
     }
 
@@ -805,16 +822,26 @@ impl Worker {
             count: self.failures,
         });
         if self.failures >= MAX_CRASHES {
-            self.fall_back("engine keeps failing");
+            self.disable_checking("engine keeps failing");
         } else {
             let backoff = Duration::from_millis(500) * 2u32.pow(self.failures - 1);
             self.retry_at = Some(Instant::now() + backoff);
         }
     }
 
-    fn fall_back(&mut self, _reason: &'static str) {
-        self.log(EngineMetadata::Fallback);
-        self.engine = Engine::InProcess(None);
+    fn disable_checking(&mut self, _reason: &'static str) {
+        self.log(EngineMetadata::Disabled);
+        self.kill_engine();
+        self.engine = Engine::Stopped;
+        self.want = None;
+        self.published = None;
+        self.poisoned = None;
+        self.retry_at = None;
+        let mut state = self.shared.lock();
+        self.shared.enabled.store(false, Ordering::Relaxed);
+        state.epoch = state.epoch.wrapping_add(1);
+        state.latest = None;
+        self.shared.published.notify_all();
     }
 
     fn log(&self, event: EngineMetadata) {
@@ -1043,5 +1070,42 @@ mod tests {
         assert_eq!(parse_idle("-3"), None);
         assert_eq!(parse_idle("soon"), None);
         assert_eq!(parse_idle("1e30"), None);
+    }
+}
+
+#[cfg(test)]
+mod fail_closed_tests {
+    use super::*;
+    #[test]
+    fn engine_failure_disables_processing_and_discards_owned_snapshots() {
+        let (tx, rx) = mpsc::channel();
+        let (render_tx, _render_rx) = mpsc::channel();
+        let shared = Arc::new(Shared {
+            state: Mutex::new(SharedState::default()),
+            published: Condvar::new(),
+            enabled: AtomicBool::new(true),
+        });
+        let mut worker = Worker::new(
+            rx,
+            tx,
+            shared.clone(),
+            render_tx,
+            CustomDict::empty(),
+            WorkerConfig {
+                mode: EngineMode::Subprocess,
+                idle: DEFAULT_IDLE,
+            },
+        );
+        worker.want = Some(Want {
+            epoch: 0,
+            text: "visibleCanary".into(),
+            cursor: 13,
+        });
+        worker.poisoned = Some("poisonCanary".into());
+        worker.disable_checking("synthetic failure");
+        assert!(!shared.enabled.load(Ordering::Relaxed));
+        assert!(worker.want.is_none() && worker.poisoned.is_none() && worker.published.is_none());
+        assert!(matches!(worker.engine, Engine::Stopped));
+        assert!(shared.lock().latest.is_none());
     }
 }

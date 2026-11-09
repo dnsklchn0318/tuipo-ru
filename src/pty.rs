@@ -49,9 +49,6 @@ const TICK_INTERVAL: Duration = Duration::from_millis(50);
 /// bites when the engine is cold-starting (~0.2 s) or wedged.
 const FIX_SYNC_TIMEOUT: Duration = Duration::from_secs(1);
 
-/// How often a running session checks the `tuipo off` switch.
-const SWITCH_POLL: Duration = Duration::from_millis(500);
-
 /// Opt-in switch for Tab→quick-fix behavior. Default is off so that wrapping
 /// shells / TUIs see Tab with its normal meaning. Enabled by
 /// `tab_fix = true` in `~/.config/tuipo/config.toml`, or by setting
@@ -263,18 +260,26 @@ fn pump_stdin_to_pty(
     let mut picker = PickerCtx::new();
     picker.eligibility = eligibility;
     let mut suspended = false;
+    let mut forwarding_only = false;
     loop {
         match handle.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {
+                // Once disabled, never reconstruct this session again. Re-enabling
+                // applies to a fresh application with trustworthy screen state.
+                forwarding_only |= crate::config::switched_off() || !state.lints_enabled();
+                if forwarding_only {
+                    state.set_processing(false);
+                }
                 // Canonical no-echo is the standard password mode. Raw TUI
                 // password widgets are indistinguishable from ordinary TUI input.
-                let private = master
-                    .lock()
-                    .ok()
-                    .and_then(|m| m.get_termios())
-                    .map(|t| private_terminal_mode(t.local_flags))
-                    .unwrap_or(true);
+                let private = forwarding_only
+                    || master
+                        .lock()
+                        .ok()
+                        .and_then(|m| m.get_termios())
+                        .map(|t| private_terminal_mode(t.local_flags))
+                        .unwrap_or(true);
                 if private || suspended {
                     state.discard_input();
                     picker_dismiss(&mut picker, &event_tx);
@@ -917,13 +922,46 @@ fn render_loop(
     let mut last_screen_version = observer.state().version;
     let mut last_matcher_positions = 0usize;
     let hover_window = crate::config::get().hover_duration();
-    // `tuipo off` / `tuipo on`, checked every `SWITCH_POLL`. While off,
-    // the lints are dropped before every paint, so the painter clears what
-    // it drew and draws nothing new; the lint worker is paused too.
+    // Observe off before every event. Once disabled, retain only byte
+    // forwarding for this session; on requires a fresh application launch.
     let mut switched_on = true;
-    let mut switch_checked = Instant::now();
 
     while let Ok(ev) = event_rx.recv() {
+        if switched_on && (crate::config::switched_off() || !lint_switch.enabled()) {
+            switched_on = false;
+            lint_switch.set(false);
+            // Clear annotations using the previous public grid, then discard it.
+            matcher.clear_lints();
+            let _ = paint::paint(&mut handle, &mut gate, &matcher, observer.state());
+            overlay_gate.set_engaged(None);
+            let _ = crate::picker::paint_overlay(
+                &mut handle,
+                &mut overlay_gate,
+                &matcher,
+                observer.state(),
+            );
+            matcher.reset();
+            screen_events.clear();
+            gate.forget_painted();
+            *eligibility.lock().unwrap() = None;
+            debug.log_switch(false);
+        }
+        if !switched_on {
+            match ev {
+                RenderEvent::PtyBytes(bytes) => {
+                    if handle
+                        .write_all(&bytes)
+                        .and_then(|()| handle.flush())
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                RenderEvent::PtyEof => break,
+                _ => {}
+            }
+            continue;
+        }
         match ev {
             RenderEvent::PtyBytes(bytes) => {
                 if handle.write_all(&bytes).is_err() {
@@ -1040,22 +1078,6 @@ fn render_loop(
                 );
             }
             RenderEvent::Tick => {
-                if switch_checked.elapsed() >= SWITCH_POLL {
-                    switch_checked = Instant::now();
-                    let on = !crate::config::switched_off();
-                    if on != switched_on {
-                        switched_on = on;
-                        lint_switch.set(on);
-                        overlay_gate.set_engaged(None);
-                        gate.mark_dirty();
-                        if debug.enabled() {
-                            debug.log_switch(on);
-                        }
-                    }
-                }
-                if !switched_on {
-                    matcher.clear_lints();
-                }
                 // Re-evaluate the picker hover before drawing — cursor
                 // may have been idle long enough that the tooltip should
                 // appear (or vanish if the cursor just moved out).
