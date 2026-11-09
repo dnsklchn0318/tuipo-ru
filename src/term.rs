@@ -15,10 +15,11 @@ impl RawModeGuard {
     pub fn new() -> Result<Self> {
         let on_tty = std::io::stdin().is_tty() && std::io::stdout().is_tty();
         if on_tty {
-            crossterm::terminal::enable_raw_mode()
-                .context("failed to enable terminal raw mode")?;
+            crossterm::terminal::enable_raw_mode().context("failed to enable terminal raw mode")?;
         }
-        Ok(Self { raw_enabled: on_tty })
+        Ok(Self {
+            raw_enabled: on_tty,
+        })
     }
 }
 

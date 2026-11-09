@@ -136,7 +136,11 @@ impl<'a> StatePerformer<'a> {
             return;
         }
         if let Some(events) = self.events.as_deref_mut() {
-            events.push(ScreenEvent::Erase(EraseEvent { row, col_start, col_end }));
+            events.push(ScreenEvent::Erase(EraseEvent {
+                row,
+                col_start,
+                col_end,
+            }));
         }
     }
 
@@ -185,9 +189,15 @@ impl<'a> StatePerformer<'a> {
 
 impl Perform for StatePerformer<'_> {
     fn print(&mut self, c: char) {
+        let width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0) as u16;
+        if width == 0 {
+            return;
+        }
+        if width > 1 && self.state.cursor.col + width > self.state.cols {
+            self.state.pending_wrap = true;
+        }
         // Deferred wrap: if the previous print left us pending at the right
         // edge, do the wrap now BEFORE placing this character, then advance.
-        // Double-width chars (CJK / emoji) aren't modeled — phase-7 polish.
         let last_col = self.state.cols.saturating_sub(1);
         if self.state.pending_wrap {
             if self.state.cursor.row + 1 < self.state.rows {
@@ -200,11 +210,12 @@ impl Perform for StatePerformer<'_> {
         // the cell where the character is visible.
         let at = self.state.cursor;
         self.push_print(c, at);
-        if self.state.cursor.col < last_col {
-            self.state.cursor.col += 1;
+        if self.state.cursor.col + width <= last_col {
+            self.state.cursor.col += width;
         } else {
             // We're at the last column; the char is drawn here, cursor stays,
             // but next print will wrap.
+            self.state.cursor.col = last_col;
             self.state.pending_wrap = true;
         }
         self.state.bump_version();
@@ -672,9 +683,27 @@ mod tests {
         let events = feed_events(&mut o, b"abc");
         let p = prints(&events);
         assert_eq!(p.len(), 3);
-        assert_eq!(p[0], PrintEvent { ch: 'a', at: CursorPos { row: 0, col: 0 } });
-        assert_eq!(p[1], PrintEvent { ch: 'b', at: CursorPos { row: 0, col: 1 } });
-        assert_eq!(p[2], PrintEvent { ch: 'c', at: CursorPos { row: 0, col: 2 } });
+        assert_eq!(
+            p[0],
+            PrintEvent {
+                ch: 'a',
+                at: CursorPos { row: 0, col: 0 }
+            }
+        );
+        assert_eq!(
+            p[1],
+            PrintEvent {
+                ch: 'b',
+                at: CursorPos { row: 0, col: 1 }
+            }
+        );
+        assert_eq!(
+            p[2],
+            PrintEvent {
+                ch: 'c',
+                at: CursorPos { row: 0, col: 2 }
+            }
+        );
     }
 
     #[test]
@@ -683,7 +712,13 @@ mod tests {
         let events = feed_events(&mut o, b"\x1b[10;5Hx");
         let p = prints(&events);
         assert_eq!(p.len(), 1);
-        assert_eq!(p[0], PrintEvent { ch: 'x', at: CursorPos { row: 9, col: 4 } });
+        assert_eq!(
+            p[0],
+            PrintEvent {
+                ch: 'x',
+                at: CursorPos { row: 9, col: 4 }
+            }
+        );
     }
 
     #[test]
@@ -702,7 +737,14 @@ mod tests {
         let events = feed_events(&mut o, b"\x1b[K");
         let e = erases(&events);
         assert_eq!(e.len(), 1);
-        assert_eq!(e[0], EraseEvent { row: 3, col_start: 5, col_end: 80 });
+        assert_eq!(
+            e[0],
+            EraseEvent {
+                row: 3,
+                col_start: 5,
+                col_end: 80
+            }
+        );
     }
 
     #[test]
@@ -712,7 +754,14 @@ mod tests {
         let events = feed_events(&mut o, b"\x1b[2K");
         let e = erases(&events);
         assert_eq!(e.len(), 1);
-        assert_eq!(e[0], EraseEvent { row: 1, col_start: 0, col_end: 80 });
+        assert_eq!(
+            e[0],
+            EraseEvent {
+                row: 1,
+                col_start: 0,
+                col_end: 80
+            }
+        );
     }
 
     #[test]
@@ -723,7 +772,14 @@ mod tests {
         let e = erases(&events);
         assert_eq!(e.len(), 5);
         for (row, ev) in e.iter().enumerate() {
-            assert_eq!(*ev, EraseEvent { row: row as u16, col_start: 0, col_end: 10 });
+            assert_eq!(
+                *ev,
+                EraseEvent {
+                    row: row as u16,
+                    col_start: 0,
+                    col_end: 10
+                }
+            );
         }
     }
 
@@ -738,9 +794,30 @@ mod tests {
         let events = feed_events(&mut o, b"\x1b[J");
         let e = erases(&events);
         assert_eq!(e.len(), 3);
-        assert_eq!(e[0], EraseEvent { row: 2, col_start: 3, col_end: 10 });
-        assert_eq!(e[1], EraseEvent { row: 3, col_start: 0, col_end: 10 });
-        assert_eq!(e[2], EraseEvent { row: 4, col_start: 0, col_end: 10 });
+        assert_eq!(
+            e[0],
+            EraseEvent {
+                row: 2,
+                col_start: 3,
+                col_end: 10
+            }
+        );
+        assert_eq!(
+            e[1],
+            EraseEvent {
+                row: 3,
+                col_start: 0,
+                col_end: 10
+            }
+        );
+        assert_eq!(
+            e[2],
+            EraseEvent {
+                row: 4,
+                col_start: 0,
+                col_end: 10
+            }
+        );
     }
 
     #[test]
@@ -749,5 +826,22 @@ mod tests {
         feed(&mut o, b"hello\x1b]0;Window Title\x07world");
         // OSC consumed; cursor advanced for "hello" + "world" = 10 chars.
         assert_eq!(o.state().cursor.col, 10);
+    }
+}
+
+#[cfg(test)]
+mod unicode_width_tests {
+    use super::*;
+    #[test]
+    fn cyrillic_uses_cells_not_utf8_bytes() {
+        let mut observer = ScreenObserver::new(6, 5);
+        observer.observe("приветмир".as_bytes());
+        assert_eq!(observer.state().cursor, CursorPos { row: 1, col: 3 });
+    }
+    #[test]
+    fn wide_prompt_and_combining_marks_do_not_shift_following_ascii() {
+        let mut observer = ScreenObserver::new(80, 24);
+        observer.observe("漢🙂 е\u{301} x".as_bytes());
+        assert_eq!(observer.state().cursor.col, 8);
     }
 }

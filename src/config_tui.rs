@@ -41,12 +41,9 @@ use std::time::Instant;
 
 use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
-use crossterm::style::{
-    Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor,
-};
+use crossterm::style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor};
 use crossterm::terminal::{
-    Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
-    enable_raw_mode,
+    Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use crossterm::{event, execute, queue};
 
@@ -394,7 +391,11 @@ fn configs_equal(a: &Config, b: &Config) -> bool {
 }
 
 fn cycle_underline(mode: UnderlineMode, direction: i32) -> UnderlineMode {
-    let order = [UnderlineMode::Auto, UnderlineMode::Plain, UnderlineMode::Fancy];
+    let order = [
+        UnderlineMode::Auto,
+        UnderlineMode::Plain,
+        UnderlineMode::Fancy,
+    ];
     let i = order.iter().position(|m| *m == mode).unwrap_or(0) as i32;
     let n = order.len() as i32;
     let next = (i + direction).rem_euclid(n);
@@ -449,9 +450,7 @@ fn run_loop<W: Write>(mut state: TuiState, out: &mut W) -> RunOutcome {
 
 fn handle_key(state: &mut TuiState, key: KeyEvent) -> Option<RunOutcome> {
     // Ctrl-C always quits, regardless of mode. Don't trap the user.
-    if key.modifiers.contains(KeyModifiers::CONTROL)
-        && matches!(key.code, KeyCode::Char('c'))
-    {
+    if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
         return Some(RunOutcome::Quit);
     }
     match &mut state.mode {
@@ -573,7 +572,11 @@ fn draw<W: Write>(state: &TuiState, out: &mut W) -> io::Result<()> {
         ResetColor,
     )?;
     let help_row = divider_row + 1;
-    queue!(out, MoveTo(0, help_row), SetForegroundColor(Color::DarkGrey))?;
+    queue!(
+        out,
+        MoveTo(0, help_row),
+        SetForegroundColor(Color::DarkGrey)
+    )?;
     match &state.mode {
         Mode::Browse | Mode::Saved => {
             queue!(
@@ -731,11 +734,23 @@ mod tests {
 
     #[test]
     fn cycle_underline_visits_all_three() {
-        assert_eq!(cycle_underline(UnderlineMode::Auto, 1), UnderlineMode::Plain);
-        assert_eq!(cycle_underline(UnderlineMode::Plain, 1), UnderlineMode::Fancy);
-        assert_eq!(cycle_underline(UnderlineMode::Fancy, 1), UnderlineMode::Auto);
+        assert_eq!(
+            cycle_underline(UnderlineMode::Auto, 1),
+            UnderlineMode::Plain
+        );
+        assert_eq!(
+            cycle_underline(UnderlineMode::Plain, 1),
+            UnderlineMode::Fancy
+        );
+        assert_eq!(
+            cycle_underline(UnderlineMode::Fancy, 1),
+            UnderlineMode::Auto
+        );
         // Reverse direction.
-        assert_eq!(cycle_underline(UnderlineMode::Auto, -1), UnderlineMode::Fancy);
+        assert_eq!(
+            cycle_underline(UnderlineMode::Auto, -1),
+            UnderlineMode::Fancy
+        );
     }
 
     #[test]

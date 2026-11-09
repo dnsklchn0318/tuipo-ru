@@ -29,7 +29,12 @@ const ALWAYS_RULES: &[&str] = &["RepeatedWords", "AnA", "ModalOf", "ToTwoToo"];
 /// Rules surfaced with `grammar = true` on top of the kind whitelist:
 /// classic confusables whose kinds (raw `Grammar`, `Punctuation`,
 /// `WordChoice`, `Miscellaneous`) are too noisy to enable wholesale.
-const GRAMMAR_RULES: &[&str] = &["TheirToTheyre", "ThenThan", "ItsContraction", "LetsConfusion"];
+const GRAMMAR_RULES: &[&str] = &[
+    "TheirToTheyre",
+    "ThenThan",
+    "ItsContraction",
+    "LetsConfusion",
+];
 
 /// Rules that judge a word by the one after it. While that next word is
 /// still being typed they misfire ("a u" wants "an" until "unique" is
@@ -44,8 +49,19 @@ const DELIBERATE_REPEATS: &[&str] = &["had", "that", "very", "so", "no", "bye", 
 /// a one-letter edit also makes a word ("alot" → "allot", "alto"). When
 /// harper's SplitWords offers one of these, it goes first.
 const MISSING_SPACE_FIXES: &[&str] = &[
-    "a lot", "a bit", "a little", "in fact", "each other", "every time", "at least",
-    "as well", "no one", "of course", "thank you", "in case", "even though",
+    "a lot",
+    "a bit",
+    "a little",
+    "in fact",
+    "each other",
+    "every time",
+    "at least",
+    "as well",
+    "no one",
+    "of course",
+    "thank you",
+    "in case",
+    "even though",
 ];
 
 /// Cap on suggestions per spelling lint after merging and ranking.
@@ -54,9 +70,9 @@ const MAX_SUGGESTIONS: usize = 4;
 /// Prefixes harper's dictionary doesn't list on their own but that
 /// hyphenate onto real words ("re-run", "multi-line", "mis-parses").
 const HYPHEN_PREFIXES: &[&str] = &[
-    "re", "pre", "non", "multi", "mis", "co", "un", "sub", "anti", "inter", "semi", "post",
-    "de", "dis", "ex", "bi", "tri", "mid", "mini", "micro", "macro", "self", "auto", "cross",
-    "counter", "meta", "pseudo", "quasi", "ultra", "hyper", "super",
+    "re", "pre", "non", "multi", "mis", "co", "un", "sub", "anti", "inter", "semi", "post", "de",
+    "dis", "ex", "bi", "tri", "mid", "mini", "micro", "macro", "self", "auto", "cross", "counter",
+    "meta", "pseudo", "quasi", "ultra", "hyper", "super",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -162,6 +178,8 @@ pub struct SpellChecker {
     /// (compounds, possessives, the word after an article).
     dictionary: Arc<FstDictionary>,
     custom: CustomDict,
+    russian: Option<Arc<spellbook::Dictionary>>,
+    english: bool,
 }
 
 impl SpellChecker {
@@ -176,6 +194,8 @@ impl SpellChecker {
             linter,
             dictionary,
             custom,
+            russian: load_russian(),
+            english: crate::config::get().languages.iter().any(|l| l == "en_US"),
         }
     }
 
@@ -186,7 +206,11 @@ impl SpellChecker {
         let doc = Document::new_curated(text, &PlainEnglish);
         // `organized_lints` is what `lint()` flattens; keeping the map
         // tells us which rule produced each lint.
-        let organized = self.linter.organized_lints(&doc);
+        let organized = if self.english {
+            self.linter.organized_lints(&doc)
+        } else {
+            Default::default()
+        };
 
         // Build a char-offset → byte-offset prefix sum once, so each lint's
         // span conversion is O(1) instead of O(n).
@@ -207,7 +231,60 @@ impl SpellChecker {
                 }
             }
         }
+        self.check_russian(text, &mut issues);
         self.consolidate_spelling(issues)
+    }
+
+    fn check_russian(&self, text: &str, issues: &mut Vec<SpellIssue>) {
+        let Some(dict) = &self.russian else {
+            return;
+        };
+        let mut start = None;
+        for (end, c) in text
+            .char_indices()
+            .chain(std::iter::once((text.len(), ' ')))
+        {
+            if c.is_alphabetic() || c == '-' {
+                start.get_or_insert(end);
+                continue;
+            }
+            let Some(begin) = start.take() else {
+                continue;
+            };
+            let word = &text[begin..end];
+            if !word.chars().any(is_russian)
+                || !word.chars().all(|c| is_russian(c) || c == '-')
+                || word.chars().count() < 2
+                || self.custom.contains(word)
+                || looks_like_code(word, text, begin, end)
+                || dict.check(word)
+            {
+                continue;
+            }
+            // Omitted ё is conventional Russian spelling. Dictionary contains both
+            // variants for common words; explicit ё is never folded into е here.
+            let mut suggestions = Vec::new();
+            dict.suggester()
+                .with_ngram_suggestions(false)
+                .suggest(word, &mut suggestions);
+            let suggestions = suggestions
+                .into_iter()
+                .map(|s| preserve_case(word, &s))
+                .take(8)
+                .collect();
+            issues.push(SpellIssue {
+                byte_start: begin,
+                byte_end: end,
+                char_start: text[..begin].chars().count(),
+                char_end: text[..end].chars().count(),
+                word: word.into(),
+                message: "Возможная орфографическая ошибка".into(),
+                suggestions,
+                category: IssueCategory::Spelling,
+                priority: 50,
+                rule: "RussianSpellCheck".into(),
+            });
+        }
     }
 
     /// One spelling lint per span: rules that flag the same word
@@ -247,8 +324,15 @@ impl SpellChecker {
     fn rank_suggestions(&self, word: &str, suggestions: Vec<String>) -> Vec<String> {
         let is_known_fix = |s: &String| MISSING_SPACE_FIXES.contains(&s.to_lowercase().as_str());
         let has_single_word = suggestions.iter().any(|s| !s.contains(' '));
-        let mut ranked: Vec<String> = suggestions.iter().filter(|s| is_known_fix(s)).cloned().collect();
-        if !suggestions.first().is_some_and(|top| restores_dropped_letter(word, top)) {
+        let mut ranked: Vec<String> = suggestions
+            .iter()
+            .filter(|s| is_known_fix(s))
+            .cloned()
+            .collect();
+        if !suggestions
+            .first()
+            .is_some_and(|top| restores_dropped_letter(word, top))
+        {
             ranked.extend(self.keyboard_slips(word));
         }
         ranked.extend(
@@ -271,7 +355,8 @@ impl SpellChecker {
         if chars.len() < 2 || !chars.iter().all(char::is_ascii_alphabetic) {
             return Vec::new();
         }
-        let capitalized = chars[0].is_ascii_uppercase() && chars[1..].iter().all(char::is_ascii_lowercase);
+        let capitalized =
+            chars[0].is_ascii_uppercase() && chars[1..].iter().all(char::is_ascii_lowercase);
         if !capitalized && !chars.iter().all(char::is_ascii_lowercase) {
             return Vec::new();
         }
@@ -286,7 +371,11 @@ impl SpellChecker {
             }
             let candidate: String = candidate.into_iter().collect();
             if self.dictionary.contains_exact_word_str(&candidate) {
-                slips.push(if capitalized { capitalize(&candidate) } else { candidate });
+                slips.push(if capitalized {
+                    capitalize(&candidate)
+                } else {
+                    candidate
+                });
             }
         }
         slips
@@ -305,7 +394,10 @@ impl SpellChecker {
         let byte_end = *char_to_byte.get(char_end)?;
         let word: String = chars.get(char_start..char_end)?.iter().collect();
 
-        if looks_like_code(&word, text, byte_start, byte_end) || self.custom.contains(&word) {
+        if word.chars().any(is_russian)
+            || looks_like_code(&word, text, byte_start, byte_end)
+            || self.custom.contains(&word)
+        {
             return None;
         }
         let category = IssueCategory::from_rule(rule, lint.lint_kind);
@@ -383,7 +475,12 @@ impl SpellChecker {
     /// "multi-line") and the possessives of words it knows ("harper's"),
     /// so its spell check flags them — or a fragment of them ("mis" in
     /// "mis-parses"). True when the whole token the lint sits in is one.
-    fn is_known_compound_or_possessive(&self, text: &str, byte_start: usize, byte_end: usize) -> bool {
+    fn is_known_compound_or_possessive(
+        &self,
+        text: &str,
+        byte_start: usize,
+        byte_end: usize,
+    ) -> bool {
         let (start, end) = token_bounds(text, byte_start, byte_end);
         let token = trim_prose_punct(&text[start..end]);
         match strip_possessive(token) {
@@ -445,7 +542,11 @@ fn next_word_is_complete(text: &str, byte_end: usize) -> bool {
     let Some(word) = rest.split_whitespace().next() else {
         return true;
     };
-    word.len() < rest.len() || word.chars().next_back().is_some_and(|c| !c.is_alphanumeric())
+    word.len() < rest.len()
+        || word
+            .chars()
+            .next_back()
+            .is_some_and(|c| !c.is_alphanumeric())
 }
 
 /// Byte range of the whitespace-delimited token(s) covering
@@ -472,6 +573,78 @@ fn trim_prose_punct(token: &str) -> &str {
         .trim_end_matches([
             '"', '\'', ')', ']', '*', ',', '.', ';', ':', '!', '?', '\u{201d}', '\u{2019}',
         ])
+}
+
+fn is_russian(c: char) -> bool {
+    matches!(c, 'а'..='я' | 'А'..='Я' | 'ё' | 'Ё')
+}
+
+fn preserve_case(original: &str, replacement: &str) -> String {
+    if original
+        .chars()
+        .filter(|c| c.is_alphabetic())
+        .all(|c| c.is_uppercase())
+    {
+        replacement.to_uppercase()
+    } else if original.chars().next().is_some_and(char::is_uppercase) {
+        let mut chars = replacement.chars();
+        chars
+            .next()
+            .map(|c| c.to_uppercase().collect::<String>() + chars.as_str())
+            .unwrap_or_default()
+    } else {
+        replacement.to_string()
+    }
+}
+
+fn load_russian() -> Option<Arc<spellbook::Dictionary>> {
+    let cfg = crate::config::get();
+    if !cfg.languages.iter().any(|l| l == "ru_RU") {
+        return None;
+    }
+    if cfg.russian_aff_path.is_none() && cfg.russian_dic_path.is_none() {
+        static BUNDLED: std::sync::OnceLock<Arc<spellbook::Dictionary>> =
+            std::sync::OnceLock::new();
+        return Some(
+            BUNDLED
+                .get_or_init(|| {
+                    Arc::new(
+                        spellbook::Dictionary::new(
+                            include_str!("../assets/ru_RU/ru_RU.aff"),
+                            include_str!("../assets/ru_RU/ru_RU.dic"),
+                        )
+                        .expect("bundled Russian dictionary must parse"),
+                    )
+                })
+                .clone(),
+        );
+    }
+    let load = || -> anyhow::Result<spellbook::Dictionary> {
+        let aff = cfg
+            .russian_aff_path
+            .as_ref()
+            .map(std::fs::read_to_string)
+            .transpose()?;
+        let dic = cfg
+            .russian_dic_path
+            .as_ref()
+            .map(std::fs::read_to_string)
+            .transpose()?;
+        spellbook::Dictionary::new(
+            aff.as_deref()
+                .unwrap_or(include_str!("../assets/ru_RU/ru_RU.aff")),
+            dic.as_deref()
+                .unwrap_or(include_str!("../assets/ru_RU/ru_RU.dic")),
+        )
+        .map_err(|err| anyhow::anyhow!("{err:?}"))
+    };
+    match load() {
+        Ok(dict) => Some(Arc::new(dict)),
+        Err(err) => {
+            eprintln!("tuipo: Russian dictionary unavailable: {err}");
+            None
+        }
+    }
 }
 
 impl Default for SpellChecker {
@@ -503,6 +676,15 @@ fn suggestion_replacement(s: &Suggestion) -> Option<String> {
 /// identifiers.
 fn looks_like_code(word: &str, full_text: &str, byte_start: usize, byte_end: usize) -> bool {
     if word.is_empty() {
+        return true;
+    }
+    if full_text[..byte_start]
+        .chars()
+        .filter(|&c| c == '`')
+        .count()
+        % 2
+        == 1
+    {
         return true;
     }
     let (start, end) = token_bounds(full_text, byte_start, byte_end);
@@ -562,8 +744,8 @@ fn looks_like_code_token(word: &str) -> bool {
     let mut prev: Option<char> = None;
     for &c in &chars {
         if let Some(p) = prev
-            && p.is_ascii_lowercase()
-            && c.is_ascii_uppercase()
+            && p.is_lowercase()
+            && c.is_uppercase()
         {
             return true;
         }
@@ -594,7 +776,10 @@ mod tests {
             .iter()
             .filter(|i| i.category == IssueCategory::Spelling)
             .collect();
-        assert!(spelling.is_empty(), "unexpected spelling issues: {spelling:?}");
+        assert!(
+            spelling.is_empty(),
+            "unexpected spelling issues: {spelling:?}"
+        );
     }
 
     #[test]
@@ -699,7 +884,9 @@ mod tests {
     fn version_like_tokens_are_skipped() {
         let issues = check("install rust 1.93 now");
         assert!(
-            !issues.iter().any(|i| i.word.chars().any(|c| c.is_ascii_digit())),
+            !issues
+                .iter()
+                .any(|i| i.word.chars().any(|c| c.is_ascii_digit())),
             "version-like token got flagged: {issues:?}",
         );
     }
@@ -763,8 +950,18 @@ mod tests {
         // be treated as code-adjacent and skipped. Same for spans
         // containing CamelCase or paths.
         assert!(looks_like_code("the API is", "the API is broken", 0, 10));
-        assert!(looks_like_code("useState should", "useState should not", 0, 15));
-        assert!(looks_like_code("src/main.rs is", "src/main.rs is open", 0, 14));
+        assert!(looks_like_code(
+            "useState should",
+            "useState should not",
+            0,
+            15
+        ));
+        assert!(looks_like_code(
+            "src/main.rs is",
+            "src/main.rs is open",
+            0,
+            14
+        ));
     }
 
     #[test]
@@ -772,7 +969,12 @@ mod tests {
         // No code-shaped token anywhere → don't skip. This is what makes
         // grammar lints reach the painter on real prose.
         assert!(!looks_like_code("the cat is", "the cat is here", 0, 10));
-        assert!(!looks_like_code("there are two", "there are two reasons", 0, 13));
+        assert!(!looks_like_code(
+            "there are two",
+            "there are two reasons",
+            0,
+            13
+        ));
     }
 
     #[test]
@@ -783,19 +985,58 @@ mod tests {
         // falls through to Other and is never surfaced, no matter what
         // the user's config says. Locking this down here so a future
         // refactor doesn't quietly re-enable the noisy kinds.
-        assert_eq!(IssueCategory::from_kind(LintKind::Spelling), IssueCategory::Spelling);
-        assert_eq!(IssueCategory::from_kind(LintKind::Typo), IssueCategory::Spelling);
-        assert_eq!(IssueCategory::from_kind(LintKind::Agreement), IssueCategory::Grammar);
-        assert_eq!(IssueCategory::from_kind(LintKind::Malapropism), IssueCategory::Grammar);
-        assert_eq!(IssueCategory::from_kind(LintKind::Eggcorn), IssueCategory::Grammar);
-        assert_eq!(IssueCategory::from_kind(LintKind::Nonstandard), IssueCategory::Grammar);
-        assert_eq!(IssueCategory::from_kind(LintKind::Usage), IssueCategory::Grammar);
-        assert_eq!(IssueCategory::from_kind(LintKind::Grammar), IssueCategory::Other);
-        assert_eq!(IssueCategory::from_kind(LintKind::Punctuation), IssueCategory::Other);
-        assert_eq!(IssueCategory::from_kind(LintKind::Capitalization), IssueCategory::Other);
-        assert_eq!(IssueCategory::from_kind(LintKind::BoundaryError), IssueCategory::Other);
-        assert_eq!(IssueCategory::from_kind(LintKind::Style), IssueCategory::Style);
-        assert_eq!(IssueCategory::from_kind(LintKind::Repetition), IssueCategory::Style);
+        assert_eq!(
+            IssueCategory::from_kind(LintKind::Spelling),
+            IssueCategory::Spelling
+        );
+        assert_eq!(
+            IssueCategory::from_kind(LintKind::Typo),
+            IssueCategory::Spelling
+        );
+        assert_eq!(
+            IssueCategory::from_kind(LintKind::Agreement),
+            IssueCategory::Grammar
+        );
+        assert_eq!(
+            IssueCategory::from_kind(LintKind::Malapropism),
+            IssueCategory::Grammar
+        );
+        assert_eq!(
+            IssueCategory::from_kind(LintKind::Eggcorn),
+            IssueCategory::Grammar
+        );
+        assert_eq!(
+            IssueCategory::from_kind(LintKind::Nonstandard),
+            IssueCategory::Grammar
+        );
+        assert_eq!(
+            IssueCategory::from_kind(LintKind::Usage),
+            IssueCategory::Grammar
+        );
+        assert_eq!(
+            IssueCategory::from_kind(LintKind::Grammar),
+            IssueCategory::Other
+        );
+        assert_eq!(
+            IssueCategory::from_kind(LintKind::Punctuation),
+            IssueCategory::Other
+        );
+        assert_eq!(
+            IssueCategory::from_kind(LintKind::Capitalization),
+            IssueCategory::Other
+        );
+        assert_eq!(
+            IssueCategory::from_kind(LintKind::BoundaryError),
+            IssueCategory::Other
+        );
+        assert_eq!(
+            IssueCategory::from_kind(LintKind::Style),
+            IssueCategory::Style
+        );
+        assert_eq!(
+            IssueCategory::from_kind(LintKind::Repetition),
+            IssueCategory::Style
+        );
     }
 
     #[test]
@@ -936,7 +1177,10 @@ mod tests {
             "ha ha nice one",
         ] {
             let issues = check_raw(text);
-            assert!(by_rule(&issues, "RepeatedWords").is_none(), "{text:?}: {issues:?}");
+            assert!(
+                by_rule(&issues, "RepeatedWords").is_none(),
+                "{text:?}: {issues:?}"
+            );
         }
     }
 
@@ -944,10 +1188,16 @@ mod tests {
     fn article_mismatch_is_an_always_on_lint() {
         let issues = check_raw("add an new endpoint now");
         let ana = by_rule(&issues, "AnA").expect("`an new` flagged");
-        assert_eq!((ana.word.as_str(), ana.category), ("an", IssueCategory::Spelling));
+        assert_eq!(
+            (ana.word.as_str(), ana.category),
+            ("an", IssueCategory::Spelling)
+        );
         assert_eq!(ana.suggestions, vec!["a"]);
         let issues = check_raw("this is a important change");
-        assert_eq!(by_rule(&issues, "AnA").map(|i| i.suggestions.clone()), Some(vec!["an".into()]));
+        assert_eq!(
+            by_rule(&issues, "AnA").map(|i| i.suggestions.clone()),
+            Some(vec!["an".into()])
+        );
     }
 
     #[test]
@@ -977,7 +1227,10 @@ mod tests {
         let issues = check_raw("it could of been worse");
         let modal = by_rule(&issues, "ModalOf").expect("`could of` flagged");
         assert_eq!(modal.category, IssueCategory::Spelling);
-        assert_eq!(modal.suggestions.first().map(String::as_str), Some("could have"));
+        assert_eq!(
+            modal.suggestions.first().map(String::as_str),
+            Some("could have")
+        );
     }
 
     #[test]
@@ -998,16 +1251,40 @@ mod tests {
     #[test]
     fn issue_category_rule_overrides() {
         use IssueCategory::*;
-        assert_eq!(IssueCategory::from_rule("RepeatedWords", LintKind::Repetition), Spelling);
-        assert_eq!(IssueCategory::from_rule("AnA", LintKind::Miscellaneous), Spelling);
-        assert_eq!(IssueCategory::from_rule("ModalOf", LintKind::WordChoice), Spelling);
+        assert_eq!(
+            IssueCategory::from_rule("RepeatedWords", LintKind::Repetition),
+            Spelling
+        );
+        assert_eq!(
+            IssueCategory::from_rule("AnA", LintKind::Miscellaneous),
+            Spelling
+        );
+        assert_eq!(
+            IssueCategory::from_rule("ModalOf", LintKind::WordChoice),
+            Spelling
+        );
         // harper ≥ 2.1 re-kinds to/too as WordChoice; it must stay visible.
-        assert_eq!(IssueCategory::from_rule("ToTwoToo", LintKind::WordChoice), Spelling);
-        assert_eq!(IssueCategory::from_rule("TheirToTheyre", LintKind::Grammar), Grammar);
-        assert_eq!(IssueCategory::from_rule("ItsContraction", LintKind::Punctuation), Grammar);
+        assert_eq!(
+            IssueCategory::from_rule("ToTwoToo", LintKind::WordChoice),
+            Spelling
+        );
+        assert_eq!(
+            IssueCategory::from_rule("TheirToTheyre", LintKind::Grammar),
+            Grammar
+        );
+        assert_eq!(
+            IssueCategory::from_rule("ItsContraction", LintKind::Punctuation),
+            Grammar
+        );
         // Other Repetition-kind rules ("that that" → "that which") stay hidden.
-        assert_eq!(IssueCategory::from_rule("ThatWhich", LintKind::Repetition), Style);
-        assert_eq!(IssueCategory::from_rule("SpellCheck", LintKind::Spelling), Spelling);
+        assert_eq!(
+            IssueCategory::from_rule("ThatWhich", LintKind::Repetition),
+            Style
+        );
+        assert_eq!(
+            IssueCategory::from_rule("SpellCheck", LintKind::Spelling),
+            Spelling
+        );
     }
 
     #[test]
@@ -1029,7 +1306,9 @@ mod tests {
             let end = start + token.len();
             let issues = check_raw(text);
             assert!(
-                !issues.iter().any(|i| i.byte_start < end && i.byte_end > start),
+                !issues
+                    .iter()
+                    .any(|i| i.byte_start < end && i.byte_end > start),
                 "lint on {token:?} in {text:?}: {issues:?}"
             );
         }
@@ -1038,17 +1317,26 @@ mod tests {
     #[test]
     fn hyphenated_compounds_of_known_words_are_accepted() {
         let issues = check_raw("we re-run the multi-line non-empty check and it mis-parses");
-        let spelling: Vec<_> = issues.iter().filter(|i| i.category == IssueCategory::Spelling).collect();
+        let spelling: Vec<_> = issues
+            .iter()
+            .filter(|i| i.category == IssueCategory::Spelling)
+            .collect();
         assert!(spelling.is_empty(), "{spelling:?}");
         // A real typo inside a compound still counts.
         let issues = check_raw("we re-intrduced the bug");
-        assert!(issues.iter().any(|i| i.category == IssueCategory::Spelling), "{issues:?}");
+        assert!(
+            issues.iter().any(|i| i.category == IssueCategory::Spelling),
+            "{issues:?}"
+        );
     }
 
     #[test]
     fn possessives_of_known_words_and_acronyms_are_accepted() {
         let issues = check_raw("the harper's dictionary and the PTY's buffer");
-        let spelling: Vec<_> = issues.iter().filter(|i| i.category == IssueCategory::Spelling).collect();
+        let spelling: Vec<_> = issues
+            .iter()
+            .filter(|i| i.category == IssueCategory::Spelling)
+            .collect();
         assert!(spelling.is_empty(), "{spelling:?}");
     }
 
@@ -1069,8 +1357,15 @@ mod tests {
         let issues = check_raw("fix taht bug");
         let on_taht: Vec<_> = issues.iter().filter(|i| i.word == "taht").collect();
         assert_eq!(on_taht.len(), 1, "{issues:?}");
-        assert_eq!(on_taht[0].suggestions.first().map(String::as_str), Some("that"));
-        assert!(!on_taht[0].suggestions.iter().any(|s| s.contains(' ')), "{:?}", on_taht[0]);
+        assert_eq!(
+            on_taht[0].suggestions.first().map(String::as_str),
+            Some("that")
+        );
+        assert!(
+            !on_taht[0].suggestions.iter().any(|s| s.contains(' ')),
+            "{:?}",
+            on_taht[0]
+        );
     }
 
     #[test]
@@ -1088,7 +1383,11 @@ mod tests {
             ("Teh", "The"),
         ] {
             let issues = check_raw(&format!("please {typo} now"));
-            assert_eq!(top_fix(&issues, typo).as_deref(), Some(fix), "{typo}: {issues:?}");
+            assert_eq!(
+                top_fix(&issues, typo).as_deref(),
+                Some(fix),
+                "{typo}: {issues:?}"
+            );
         }
     }
 
@@ -1097,13 +1396,21 @@ mod tests {
         // "ned" is one swap from "end", but harper's "need" puts back a
         // dropped letter — a slip too, and here the intended word.
         let issues = check_raw("you don't ned to worry");
-        assert_eq!(top_fix(&issues, "ned").as_deref(), Some("need"), "{issues:?}");
+        assert_eq!(
+            top_fix(&issues, "ned").as_deref(),
+            Some("need"),
+            "{issues:?}"
+        );
     }
 
     #[test]
     fn well_known_missing_space_fix_wins() {
         let issues = check_raw("there are alot of errors");
-        assert_eq!(top_fix(&issues, "alot").as_deref(), Some("a lot"), "{issues:?}");
+        assert_eq!(
+            top_fix(&issues, "alot").as_deref(),
+            Some("a lot"),
+            "{issues:?}"
+        );
     }
 
     #[test]
@@ -1138,6 +1445,66 @@ mod tests {
                 slice, issue.word,
                 "byte slice {slice:?} did not match word {:?}",
                 issue.word
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod bilingual_tests {
+    use super::*;
+
+    #[test]
+    fn russian_morphology_mixed_text_and_yo() {
+        let mut checker = SpellChecker::with_custom(CustomDict::empty());
+        for text in [
+            "Привет мир",
+            "работающий работающая работающие работали работаешь",
+            "книгами книгой книгу",
+            "ёлка елка всё все",
+            "Проверь English words вместе с русскими словами",
+        ] {
+            assert!(
+                checker.check(text).is_empty(),
+                "{text}: {:?}",
+                checker.check(text)
+            );
+        }
+        let issues = checker.check("Превет world ашибка recieve");
+        for word in ["Превет", "ашибка", "recieve"] {
+            let issue = issues
+                .iter()
+                .find(|i| i.word == word)
+                .unwrap_or_else(|| panic!("{word}: {issues:?}"));
+            assert_eq!(
+                &"Превет world ашибка recieve"[issue.byte_start..issue.byte_end],
+                word
+            );
+            assert!(!issue.suggestions.is_empty());
+        }
+    }
+
+    #[test]
+    fn russian_case_code_and_exceptions() {
+        let mut checker = SpellChecker::with_custom(CustomDict::from_text("туипошечка"));
+        assert!(
+            checker
+                .check("туипошечка https://превет.рф /tmp/ашибка --превет `ашибка превет` foo_bar")
+                .is_empty()
+        );
+        for (word, expected) in [
+            ("превет", "привет"),
+            ("Превет", "Привет"),
+            ("ПРЕВЕТ", "ПРИВЕТ"),
+        ] {
+            let issues = checker.check(word);
+            let issue = issues
+                .iter()
+                .find(|i| i.word == word)
+                .expect("Russian typo");
+            assert!(
+                issue.suggestions.iter().any(|s| s == expected),
+                "{issues:?}"
             );
         }
     }

@@ -50,6 +50,8 @@ pub enum InputEvent {
 /// status row).
 #[derive(Debug, Clone)]
 pub struct PickerSnapshot {
+    pub char_start: usize,
+    pub char_end: usize,
     /// The misspelling we're offering to fix.
     pub target: String,
     /// Top suggestions, in priority order (best first).
@@ -127,4 +129,3 @@ pub enum RenderEvent {
     /// PTY closed (child exited or fd dropped).
     PtyEof,
 }
-

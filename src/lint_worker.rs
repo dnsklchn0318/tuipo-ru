@@ -147,7 +147,9 @@ impl Shared {
     fn lock(&self) -> MutexGuard<'_, SharedState> {
         // Two plain fields, each written in a single assignment: a panic
         // elsewhere can't leave them torn, so ignore poisoning.
-        self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -424,7 +426,10 @@ impl Worker {
     fn run(mut self) {
         loop {
             let first = match self.next_deadline() {
-                Some(at) => match self.rx.recv_timeout(at.saturating_duration_since(Instant::now())) {
+                Some(at) => match self
+                    .rx
+                    .recv_timeout(at.saturating_duration_since(Instant::now()))
+                {
                     Ok(msg) => Some(msg),
                     Err(RecvTimeoutError::Timeout) => None,
                     Err(RecvTimeoutError::Disconnected) => break,
@@ -472,7 +477,13 @@ impl Worker {
             WorkerMsg::Boundary => {
                 self.want = None;
                 self.published = None;
-                let idle_engine = matches!(self.engine, Engine::Ready { in_flight: None, .. });
+                let idle_engine = matches!(
+                    self.engine,
+                    Engine::Ready {
+                        in_flight: None,
+                        ..
+                    }
+                );
                 if idle_engine && self.served >= RECYCLE_AFTER {
                     self.stop_engine("recycle");
                 }
@@ -495,7 +506,9 @@ impl Worker {
             Engine::Ready {
                 in_flight: Some(f), ..
             } => Some(f.sent_at + REQUEST_TIMEOUT),
-            Engine::Ready { in_flight: None, .. } => Some(self.last_activity + self.config.idle),
+            Engine::Ready {
+                in_flight: None, ..
+            } => Some(self.last_activity + self.config.idle),
             Engine::Stopped if self.want.is_some() => self.retry_at,
             Engine::Stopped | Engine::InProcess(_) => None,
         }
@@ -510,9 +523,9 @@ impl Worker {
             Engine::Ready {
                 in_flight: Some(f), ..
             } if now >= f.sent_at + REQUEST_TIMEOUT => Some(Timer::RequestTimeout),
-            Engine::Ready { in_flight: None, .. }
-                if self.want.is_none() && now >= self.last_activity + self.config.idle =>
-            {
+            Engine::Ready {
+                in_flight: None, ..
+            } if self.want.is_none() && now >= self.last_activity + self.config.idle => {
                 Some(Timer::Idle)
             }
             _ => None,
@@ -553,8 +566,13 @@ impl Worker {
             }
             let next = match &self.engine {
                 Engine::Stopped => Next::Spawn,
-                Engine::Starting { .. } | Engine::Ready { in_flight: Some(_), .. } => Next::Wait,
-                Engine::Ready { in_flight: None, .. } => Next::Send,
+                Engine::Starting { .. }
+                | Engine::Ready {
+                    in_flight: Some(_), ..
+                } => Next::Wait,
+                Engine::Ready {
+                    in_flight: None, ..
+                } => Next::Send,
                 Engine::InProcess(_) => Next::CheckInProcess,
             };
             match next {
@@ -612,7 +630,8 @@ impl Worker {
         };
         let checker = slot.get_or_insert_with(|| SpellChecker::with_custom(CustomDict::empty()));
         // A harper panic costs this one result, not the worker.
-        let issues = catch_unwind(AssertUnwindSafe(|| checker.check(&want.text))).unwrap_or_default();
+        let issues =
+            catch_unwind(AssertUnwindSafe(|| checker.check(&want.text))).unwrap_or_default();
         let issues = without_custom_words(&self.custom, issues);
         self.publish(want, issues);
     }
@@ -631,8 +650,11 @@ impl Worker {
                 if !matches!(self.engine, Engine::Starting { .. }) {
                     return;
                 }
-                if let Engine::Starting { proc, generation, since } =
-                    std::mem::replace(&mut self.engine, Engine::Stopped)
+                if let Engine::Starting {
+                    proc,
+                    generation,
+                    since,
+                } = std::mem::replace(&mut self.engine, Engine::Stopped)
                 {
                     self.log(format_args!(
                         "ready pid={} in {}ms",
@@ -825,7 +847,10 @@ mod tests {
 
     fn spawn(custom: CustomDict) -> (LintHandle, Receiver<RenderEvent>) {
         let (render_tx, render_rx) = mpsc::channel();
-        (LintHandle::spawn_with(render_tx, custom, in_process()), render_rx)
+        (
+            LintHandle::spawn_with(render_tx, custom, in_process()),
+            render_rx,
+        )
     }
 
     /// Next `Lints` event, skipping anything else.
@@ -874,15 +899,25 @@ mod tests {
         assert!(words(&issues).contains(&"teh"), "{issues:?}");
         // Text the worker was never asked about must time out, not return
         // another text's snapshot.
-        assert!(handle.issues_for("teh dog barks", Duration::from_millis(50)).is_none());
+        assert!(
+            handle
+                .issues_for("teh dog barks", Duration::from_millis(50))
+                .is_none()
+        );
     }
 
     #[test]
     fn issues_for_blank_or_oversized_text_is_immediate() {
         let (handle, _rx) = spawn(CustomDict::empty());
-        assert_eq!(handle.issues_for("   ", Duration::ZERO).map(|v| v.len()), Some(0));
+        assert_eq!(
+            handle.issues_for("   ", Duration::ZERO).map(|v| v.len()),
+            Some(0)
+        );
         let huge = "teh ".repeat(MAX_LINT_BYTES / 4 + 1);
-        assert_eq!(handle.issues_for(&huge, Duration::ZERO).map(|v| v.len()), Some(0));
+        assert_eq!(
+            handle.issues_for(&huge, Duration::ZERO).map(|v| v.len()),
+            Some(0)
+        );
     }
 
     #[test]
@@ -929,11 +964,16 @@ mod tests {
                     _ => {}
                 }
             }
-            assert!(seen_boundary, "round {round}: Boundary never reached the render loop");
+            assert!(
+                seen_boundary,
+                "round {round}: Boundary never reached the render loop"
+            );
         }
         // And the next line is served normally.
         handle.update("new teh line", 12);
-        let issues = handle.issues_for("new teh line", HARPER_WAIT).expect("post-boundary snapshot");
+        let issues = handle
+            .issues_for("new teh line", HARPER_WAIT)
+            .expect("post-boundary snapshot");
         assert!(words(&issues).contains(&"teh"), "{issues:?}");
     }
 
@@ -941,8 +981,13 @@ mod tests {
     fn custom_dictionary_words_are_filtered_from_results() {
         let (handle, _rx) = spawn(CustomDict::from_text("teh\n"));
         handle.update("teh wrold", 9);
-        let issues = handle.issues_for("teh wrold", HARPER_WAIT).expect("snapshot");
-        assert!(!words(&issues).contains(&"teh"), "custom word leaked: {issues:?}");
+        let issues = handle
+            .issues_for("teh wrold", HARPER_WAIT)
+            .expect("snapshot");
+        assert!(
+            !words(&issues).contains(&"teh"),
+            "custom word leaked: {issues:?}"
+        );
         assert!(words(&issues).contains(&"wrold"), "{issues:?}");
     }
 
@@ -974,11 +1019,18 @@ mod tests {
             "paused worker published lints"
         );
         // Tab-fix must not wait on a paused worker.
-        assert_eq!(handle.issues_for("teh cat", Duration::ZERO).map(|v| v.len()), Some(0));
+        assert_eq!(
+            handle
+                .issues_for("teh cat", Duration::ZERO)
+                .map(|v| v.len()),
+            Some(0)
+        );
 
         switch.set(true);
         handle.update("teh cat", 7);
-        let issues = handle.issues_for("teh cat", HARPER_WAIT).expect("resumed snapshot");
+        let issues = handle
+            .issues_for("teh cat", HARPER_WAIT)
+            .expect("resumed snapshot");
         assert!(words(&issues).contains(&"teh"), "{issues:?}");
     }
 

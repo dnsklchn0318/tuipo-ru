@@ -19,6 +19,8 @@
 
 use crate::input::InputState;
 use crate::spell::SpellIssue;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthChar;
 
 /// Bytes to inject into the PTY's stdin (and into the local buffer) to
 /// apply a fix. Order: `left_moves` (arrow-left CSIs), then `right_moves`
@@ -96,6 +98,19 @@ pub fn top_suggestions(issue: &SpellIssue, max: usize) -> Vec<String> {
 /// current buffer (stale lint).
 pub fn build_fix(state: &InputState, issue: &SpellIssue, suggestion: &str) -> Option<Fix> {
     let text = state.buffer().text();
+    // The child may edit graphemes, scalars or cells. Only inject when all
+    // three models agree. Cyrillic (including ё) is one cell per scalar.
+    if state.buffer().in_paste()
+        || !safe_edit_text(text)
+        || !safe_edit_text(suggestion)
+        || suggestion.contains(['\n', '\r'])
+        || text.get(issue.byte_start..issue.byte_end) != Some(issue.word.as_str())
+        || issue.byte_start > issue.byte_end
+        || text[..issue.byte_start].chars().count() != issue.char_start
+        || text[..issue.byte_end].chars().count() != issue.char_end
+    {
+        return None;
+    }
     let text_chars = text.chars().count();
     if issue.char_end > text_chars {
         return None;
@@ -145,6 +160,16 @@ pub fn build_fix(state: &InputState, issue: &SpellIssue, suggestion: &str) -> Op
         backspaces,
         replacement_text: suggestion.to_string(),
         issue_word: issue.word.clone(),
+    })
+}
+
+fn safe_edit_text(text: &str) -> bool {
+    text.graphemes(true).all(|g| {
+        g == "\n"
+            || (g.chars().count() == 1
+                && g.chars()
+                    .next()
+                    .is_some_and(|c| c.width() == Some(1) && !c.is_control()))
     })
 }
 
@@ -442,6 +467,86 @@ mod tests {
         let fix = build_fix(&s, &issue, "the").expect("last-line lint should be fixable");
         // End-of-buffer regime: trailing = " more" (after char_end).
         assert_eq!(fix.replacement_text, "the more");
-        assert!(!fix.replacement_text.contains('\n'), "fix must not inject \\n");
+        assert!(
+            !fix.replacement_text.contains('\n'),
+            "fix must not inject \\n"
+        );
+    }
+}
+
+#[cfg(test)]
+mod unicode_tests {
+    use super::*;
+
+    fn issue(text: &str, word: &str) -> SpellIssue {
+        let start = text.find(word).unwrap();
+        SpellIssue {
+            byte_start: start,
+            byte_end: start + word.len(),
+            char_start: text[..start].chars().count(),
+            char_end: text[..start + word.len()].chars().count(),
+            word: word.into(),
+            message: String::new(),
+            suggestions: vec![],
+            category: crate::spell::IssueCategory::Spelling,
+            priority: 50,
+            rule: "RussianSpellCheck".into(),
+        }
+    }
+
+    #[test]
+    fn replacements_preserve_unicode_surroundings_and_cursor() {
+        for (text, word, replacement) in [
+            ("превет мир", "превет", "привет"),
+            ("мир ашибка рядом", "ашибка", "ошибочка"),
+            ("мир ашибка", "ашибка", "ошибка"),
+            ("ошибочка рядом", "ошибочка", "ошибка"),
+        ] {
+            for inside in [false, true] {
+                let mut state = InputState::with_checker();
+                state.feed_bytes(text.as_bytes());
+                let issue = issue(text, word);
+                if inside {
+                    for _ in issue.char_start + 1..text.chars().count() {
+                        state.feed_bytes(b"\x1b[D");
+                    }
+                }
+                let fix = build_fix(&state, &issue, replacement).unwrap();
+                for _ in 0..fix.left_moves {
+                    state.feed_bytes(b"\x1b[D");
+                }
+                for _ in 0..fix.right_moves {
+                    state.feed_bytes(b"\x1b[C");
+                }
+                for _ in 0..fix.backspaces {
+                    state.feed_bytes(&[0x08]);
+                }
+                state.feed_bytes(fix.replacement_text.as_bytes());
+                assert_eq!(state.buffer().text(), text.replacen(word, replacement, 1));
+                assert_eq!(
+                    state.buffer().cursor_chars(),
+                    if inside {
+                        issue.char_start + replacement.chars().count()
+                    } else {
+                        state.buffer().text().chars().count()
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn refuses_stale_complex_and_control_replacements() {
+        for text in ["🙂 превет", "е\u{301} превет", "漢 превет"] {
+            let mut state = InputState::with_checker();
+            state.feed_bytes(text.as_bytes());
+            assert!(build_fix(&state, &issue(text, "превет"), "привет").is_none());
+        }
+        let mut state = InputState::with_checker();
+        state.feed_bytes("превет".as_bytes());
+        let mut typo = issue("превет", "превет");
+        assert!(build_fix(&state, &typo, "привет\n").is_none());
+        typo.word = "другое".into();
+        assert!(build_fix(&state, &typo, "привет").is_none());
     }
 }

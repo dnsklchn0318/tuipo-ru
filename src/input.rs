@@ -15,9 +15,9 @@ use std::time::Duration;
 
 use crate::buffer::{FeedOutcome, InputBuffer};
 use crate::lint_worker::LintHandle;
-use crate::spell::SpellIssue;
 #[cfg(test)]
 use crate::spell::SpellChecker;
+use crate::spell::SpellIssue;
 
 pub struct InputState {
     buffer: InputBuffer,
@@ -200,7 +200,9 @@ mod tests {
         let mut s = InputState::with_checker();
         s.feed_bytes(b"teh cat");
         assert!(
-            s.issues().iter().any(|i| i.word.eq_ignore_ascii_case("teh")),
+            s.issues()
+                .iter()
+                .any(|i| i.word.eq_ignore_ascii_case("teh")),
             "expected `teh` in issues: {:?}",
             s.issues(),
         );

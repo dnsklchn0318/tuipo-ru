@@ -882,7 +882,10 @@ mod tests {
             }
         }
         b.set_chunk_paste(false);
-        assert!(!had_boundary, "no Boundary should fire while chunk_paste is set");
+        assert!(
+            !had_boundary,
+            "no Boundary should fire while chunk_paste is set"
+        );
         assert_eq!(
             b.text(),
             "first line\nsecond line\nthird",

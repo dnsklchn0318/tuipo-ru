@@ -152,7 +152,10 @@ fn switch_off(path: &Path) -> io::Result<bool> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    std::fs::write(path, "tuipo is switched off while this file exists; `tuipo on` removes it.\n")?;
+    std::fs::write(
+        path,
+        "tuipo is switched off while this file exists; `tuipo on` removes it.\n",
+    )?;
     Ok(true)
 }
 
@@ -235,9 +238,7 @@ fn detect_shell(
 /// Avoids depending on `tuipo` being in `$PATH` after install.
 fn zsh_bash_hook(exe_path: &std::path::Path) -> String {
     let p = exe_path.display();
-    format!(
-        r#"[[ -z "$TUIPO_ACTIVE" ]] && [[ -x "{p}" ]] && exec "{p}" -- "$SHELL""#
-    )
+    format!(r#"[[ -z "$TUIPO_ACTIVE" ]] && [[ -x "{p}" ]] && exec "{p}" -- "$SHELL""#)
 }
 
 #[cfg(test)]

@@ -164,11 +164,11 @@ fn child_cwd_matches_parent() {
                 assert.get_output().stdout
             )
         });
-    let actual_canon = std::fs::canonicalize(&actual_raw).unwrap_or_else(|e| {
-        panic!("child pwd {actual_raw:?} did not resolve: {e}")
-    });
+    let actual_canon = std::fs::canonicalize(&actual_raw)
+        .unwrap_or_else(|e| panic!("child pwd {actual_raw:?} did not resolve: {e}"));
     assert_eq!(
-        actual_canon, tmp,
+        actual_canon,
+        tmp,
         "child pwd resolved to {} but parent cwd was {}",
         actual_canon.display(),
         tmp.display(),
@@ -439,7 +439,10 @@ fn many_small_writes_are_all_delivered() {
     let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
     for i in 1..=50 {
         let needle = format!("line-{i:02}");
-        assert!(stdout.contains(&needle), "missing {needle}: full stdout was {stdout:?}");
+        assert!(
+            stdout.contains(&needle),
+            "missing {needle}: full stdout was {stdout:?}"
+        );
     }
 }
 
@@ -458,7 +461,10 @@ fn engine_is_not_started_without_typing() {
     let log = std::fs::read_to_string(&log_path).unwrap_or_default();
     let _ = std::fs::remove_file(&log_path);
     assert!(log.contains("BOOT"), "debug log was not written:\n{log}");
-    assert!(!log.contains("spawn pid="), "engine started with no input:\n{log}");
+    assert!(
+        !log.contains("spawn pid="),
+        "engine started with no input:\n{log}"
+    );
 }
 
 /// The memory win: harper lives in a `tuipo __engine` child that exits
@@ -548,7 +554,10 @@ fn killed_engine_is_replaced() {
         );
         let pid = last_engine_pid(&log).expect("engine pid in debug log");
         let killed = Command::new("kill").args(["-9", &pid.to_string()]).status();
-        assert!(killed.is_ok_and(|s| s.success()), "could not kill engine {pid}");
+        assert!(
+            killed.is_ok_and(|s| s.success()),
+            "could not kill engine {pid}"
+        );
         assert!(
             wait_for_log(&log, "exited unexpectedly", 1, Duration::from_secs(10)),
             "engine death went unnoticed"
@@ -584,6 +593,7 @@ fn engine_subcommand_speaks_the_wire_protocol() {
 
     let mut engine = Command::new(env!("CARGO_BIN_EXE_tuipo"))
         .arg("__engine")
+        .env("XDG_CONFIG_HOME", isolated_config_dir())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -604,8 +614,10 @@ fn engine_subcommand_speaks_the_wire_protocol() {
     assert!(hello.starts_with(b"TUIPO-ENGINE"), "bad hello: {hello:?}");
 
     let mut request = 7u64.to_le_bytes().to_vec();
-    request.extend_from_slice(b"fix teh bug");
-    stdin.write_all(&(request.len() as u32).to_le_bytes()).unwrap();
+    request.extend_from_slice("fix teh bug и превет".as_bytes());
+    stdin
+        .write_all(&(request.len() as u32).to_le_bytes())
+        .unwrap();
     stdin.write_all(&request).unwrap();
     stdin.flush().unwrap();
 
@@ -618,6 +630,12 @@ fn engine_subcommand_speaks_the_wire_protocol() {
         "response doesn't mention `teh`"
     );
 
+    assert!(
+        response
+            .windows("превет".len())
+            .any(|w| w == "превет".as_bytes()),
+        "Russian lint missing from engine response"
+    );
     drop(stdin);
     let status = engine.wait().unwrap();
     assert!(status.success(), "engine exited with {status}");
@@ -628,7 +646,12 @@ fn engine_subcommand_speaks_the_wire_protocol() {
 #[test]
 fn off_switch_runs_commands_unwrapped() {
     let config = fresh_config_dir("offexec");
-    let probe = ["--", "sh", "-c", "[ -t 0 ] && echo wrapped || echo direct; echo active=$TUIPO_ACTIVE"];
+    let probe = [
+        "--",
+        "sh",
+        "-c",
+        "[ -t 0 ] && echo wrapped || echo direct; echo active=$TUIPO_ACTIVE",
+    ];
     let run = || {
         let out = tuipo()
             .args(probe)
@@ -642,7 +665,10 @@ fn off_switch_runs_commands_unwrapped() {
     assert!(tuipo_switch(&config, "off").contains("tuipo is off"));
     assert!(tuipo_switch(&config, "off").contains("already off"));
     let off = run();
-    assert!(off.contains("direct"), "switched off but still wrapped: {off:?}");
+    assert!(
+        off.contains("direct"),
+        "switched off but still wrapped: {off:?}"
+    );
     // The hook's re-entrance guard must hold, or a shell's rc file would
     // exec tuipo again in a loop.
     assert!(off.contains("active=1"), "{off:?}");
@@ -679,20 +705,35 @@ fn off_switch_pauses_and_resumes_running_sessions() {
     let (log, cfg) = (log_path.clone(), config.clone());
     let writer = thread::spawn(move || {
         type_slowly(&mut stdin, "teh ");
-        assert!(wait_for_log(&log, "ready pid=", 1, ENGINE_READY_TIMEOUT), "engine never ready");
+        assert!(
+            wait_for_log(&log, "ready pid=", 1, ENGINE_READY_TIMEOUT),
+            "engine never ready"
+        );
         thread::sleep(Duration::from_millis(500));
 
         tuipo_switch(&cfg, "off");
-        assert!(wait_for_log(&log, "SWITCH   off", 1, Duration::from_secs(5)), "off not noticed");
-        assert!(wait_for_log(&log, "stop reason=off", 1, Duration::from_secs(5)), "engine kept running");
+        assert!(
+            wait_for_log(&log, "SWITCH   off", 1, Duration::from_secs(5)),
+            "off not noticed"
+        );
+        assert!(
+            wait_for_log(&log, "stop reason=off", 1, Duration::from_secs(5)),
+            "engine kept running"
+        );
         type_slowly(&mut stdin, "wrold ");
         thread::sleep(Duration::from_millis(700));
         type_slowly(&mut stdin, "\n");
 
         tuipo_switch(&cfg, "on");
-        assert!(wait_for_log(&log, "SWITCH   on", 1, Duration::from_secs(5)), "on not noticed");
+        assert!(
+            wait_for_log(&log, "SWITCH   on", 1, Duration::from_secs(5)),
+            "on not noticed"
+        );
         type_slowly(&mut stdin, "abuot ");
-        assert!(wait_for_log(&log, "ready pid=", 2, ENGINE_READY_TIMEOUT), "engine not back");
+        assert!(
+            wait_for_log(&log, "ready pid=", 2, ENGINE_READY_TIMEOUT),
+            "engine not back"
+        );
         thread::sleep(Duration::from_millis(700));
         drop(stdin);
     });
@@ -705,8 +746,20 @@ fn off_switch_pauses_and_resumes_running_sessions() {
     let raw = String::from_utf8_lossy(&output.stdout);
     let ctx = || format!("\n--- stdout ---\n{raw:?}\n--- log ---\n{log}");
     assert!(typed.is_ok(), "typing script failed{}", ctx());
-    assert!(raw.contains("\x1b[4mteh\x1b[24m"), "nothing painted before off{}", ctx());
-    assert!(raw.contains("\x1b[24mteh"), "underline not cleared on off{}", ctx());
+    assert!(
+        raw.contains("\x1b[4mteh\x1b[24m"),
+        "nothing painted before off{}",
+        ctx()
+    );
+    assert!(
+        raw.contains("\x1b[24mteh"),
+        "underline not cleared on off{}",
+        ctx()
+    );
     assert!(!raw.contains("\x1b[4mwrold"), "painted while off{}", ctx());
-    assert!(raw.contains("\x1b[4mabuot\x1b[24m"), "not painting after on{}", ctx());
+    assert!(
+        raw.contains("\x1b[4mabuot\x1b[24m"),
+        "not painting after on{}",
+        ctx()
+    );
 }

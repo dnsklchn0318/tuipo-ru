@@ -63,6 +63,13 @@ pub enum UnderlineMode {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
+    pub languages: Vec<String>,
+    pub interactive: bool,
+    pub highlight_only: bool,
+    pub next_key: String,
+    pub previous_key: String,
+    pub russian_aff_path: Option<String>,
+    pub russian_dic_path: Option<String>,
     /// Master switch for the inline paint overlay. Off → tuipo is pure
     /// passthrough.
     pub paint: bool,
@@ -105,6 +112,13 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            languages: vec!["ru_RU".into(), "en_US".into()],
+            interactive: true,
+            highlight_only: false,
+            next_key: "ctrl+n".into(),
+            previous_key: "ctrl+p".into(),
+            russian_aff_path: None,
+            russian_dic_path: None,
             paint: true,
             underline: UnderlineMode::Auto,
             tab_fix: false,
@@ -132,10 +146,7 @@ impl Config {
         match toml::from_str::<Config>(&text) {
             Ok(cfg) => cfg,
             Err(err) => {
-                eprintln!(
-                    "tuipo: warning — could not parse {}: {err}",
-                    path.display()
-                );
+                eprintln!("tuipo: warning — could not parse {}: {err}", path.display());
                 Self::default()
             }
         }
@@ -154,10 +165,13 @@ impl Config {
     /// `TUIPO_TAB_FIX=1` forces on. The picker switch implies tab_fix
     /// because the picker is only reachable via Tab.
     pub fn tab_fix_enabled(&self) -> bool {
+        if self.highlight_only {
+            return false;
+        }
         if matches!(std::env::var("TUIPO_TAB_FIX").as_deref(), Ok("1")) {
             return true;
         }
-        self.tab_fix || self.picker_enabled_raw()
+        !self.highlight_only && (self.tab_fix || self.picker_enabled_raw())
     }
 
     /// Whether the picker UI is enabled. No env override for this one
@@ -169,7 +183,7 @@ impl Config {
     }
 
     fn picker_enabled_raw(&self) -> bool {
-        self.picker
+        self.picker && !self.highlight_only
     }
 
     /// Whether the bottom-row status overlay is drawn. Env override:
@@ -304,7 +318,61 @@ impl Config {
             let escaped = p.replace('\\', "\\\\").replace('"', "\\\"");
             s.push_str(&format!("dict_path = \"{escaped}\"\n"));
         }
+        s.push_str(&format!("languages = {:?}\ninteractive = {}\nhighlight_only = {}\nnext_key = {:?}\nprevious_key = {:?}\n", self.languages, self.interactive, self.highlight_only, self.next_key, self.previous_key));
+        for (key, value) in [
+            ("russian_aff_path", &self.russian_aff_path),
+            ("russian_dic_path", &self.russian_dic_path),
+        ] {
+            if let Some(value) = value {
+                s.push_str(&format!("{key} = {value:?}\n"));
+            }
+        }
         s
+    }
+
+    pub fn completion_direction(&self, byte: u8) -> Option<isize> {
+        if !self.interactive || self.highlight_only {
+            return None;
+        }
+        let matches = |key: &str| {
+            key.strip_prefix("ctrl+")
+                .filter(|k| k.len() == 1)
+                .is_some_and(|k| {
+                    let c = k.as_bytes()[0];
+                    c.is_ascii_alphabetic() && byte == (c.to_ascii_lowercase() - b'a' + 1)
+                })
+        };
+        if matches(&self.next_key) {
+            Some(1)
+        } else if matches(&self.previous_key) {
+            Some(-1)
+        } else {
+            None
+        }
+    }
+
+    pub fn validate_spelling(&self) -> anyhow::Result<()> {
+        for language in &self.languages {
+            anyhow::ensure!(
+                matches!(language.as_str(), "ru_RU" | "en_US"),
+                "unsupported language: {language}"
+            );
+        }
+        anyhow::ensure!(
+            self.russian_aff_path.is_some() == self.russian_dic_path.is_some(),
+            "supply both russian_aff_path and russian_dic_path"
+        );
+        if let (Some(aff), Some(dic)) = (&self.russian_aff_path, &self.russian_dic_path) {
+            let aff_text = std::fs::read_to_string(aff)?;
+            let dic_text = std::fs::read_to_string(dic)?;
+            spellbook::Dictionary::new(&aff_text, &dic_text)
+                .map_err(|err| anyhow::anyhow!("invalid Russian dictionary: {err:?}"))?;
+        }
+        Ok(())
+    }
+
+    pub fn completion_enabled(&self) -> bool {
+        self.interactive && !self.highlight_only
     }
 }
 
@@ -420,6 +488,7 @@ mod tests {
             pause_ms: 200,
             hover_ms: 400,
             dict_path: Some("~/custom/dict.txt".into()),
+            ..Config::default()
         };
         let serialized = original.to_toml_string();
         let parsed: Config = toml::from_str(&serialized).expect("roundtrip parse");
@@ -459,5 +528,29 @@ mod tests {
         let s = c.to_toml_string();
         let parsed: Config = toml::from_str(&s).expect("parse escaped path");
         assert_eq!(parsed.dict_path.as_deref(), c.dict_path.as_deref());
+    }
+}
+
+#[cfg(test)]
+mod bilingual_config_tests {
+    use super::*;
+    #[test]
+    fn bilingual_config_roundtrip_and_keys() {
+        let cfg: Config = toml::from_str("languages = ['ru_RU']\nnext_key = 'ctrl+j'\nprevious_key = 'ctrl+k'\nrussian_aff_path = '/tmp/ru.aff'\nrussian_dic_path = '/tmp/ru.dic'\n").unwrap();
+        let parsed: Config = toml::from_str(&cfg.to_toml_string()).unwrap();
+        assert_eq!(parsed.languages, ["ru_RU"]);
+        assert_eq!(parsed.russian_dic_path, cfg.russian_dic_path);
+        assert_eq!(parsed.completion_direction(10), Some(1));
+        assert_eq!(parsed.completion_direction(11), Some(-1));
+        assert_eq!(parsed.completion_direction(14), None);
+        let cfg = Config {
+            highlight_only: true,
+            tab_fix: true,
+            picker: true,
+            ..cfg
+        };
+        assert_eq!(cfg.completion_direction(10), None);
+        assert!(!cfg.tab_fix_enabled());
+        assert!(!cfg.picker_enabled());
     }
 }

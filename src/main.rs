@@ -38,8 +38,9 @@ fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     // The spell engine child (spawned by the lint worker) speaks a binary
     // protocol on stdin/stdout and never touches the terminal, so it skips
-    // the raw-mode panic hook and config loading entirely.
+    // the raw-mode panic hook. It loads the same spelling configuration.
     if argv.first().map(String::as_str) == Some(engine::ENGINE_SUBCOMMAND) {
+        config::load_global();
         std::process::exit(engine::run_server());
     }
     term::install_panic_hook();
@@ -74,6 +75,10 @@ fn main() {
     // still override individual settings — see `config::Config` for the
     // precedence rules.
     config::load_global();
+    if let Err(err) = config::get().validate_spelling() {
+        eprintln!("tuipo: invalid spelling configuration: {err:#}");
+        std::process::exit(1);
+    }
     match pty::run(args.command) {
         Ok(code) => std::process::exit(code),
         Err(err) => {

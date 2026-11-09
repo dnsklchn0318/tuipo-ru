@@ -28,8 +28,8 @@
 //! - **Response** (engine → tuipo): `u64` id + `u32` count + that many
 //!   issues (see [`encode_response`]).
 //!
-//! The engine is config-agnostic: it returns harper's lints after the
-//! code-shape filter, and the client applies the user's custom dictionary
+//! The engine loads language/dictionary configuration and returns bilingual
+//! lints after the code-shape filter. The client applies the user's custom dictionary
 //! (loaded once when tuipo starts, as it always was).
 
 use std::io::{self, BufReader, BufWriter, Read, Write};
@@ -277,7 +277,10 @@ fn read_frame(r: &mut impl Read) -> io::Result<Option<Vec<u8>>> {
     }
     let len = u32::from_le_bytes(len) as usize;
     if len > MAX_FRAME {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "frame too large"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "frame too large",
+        ));
     }
     let mut payload = vec![0u8; len];
     r.read_exact(&mut payload)?;
@@ -546,7 +549,10 @@ mod tests {
     fn truncated_response_is_an_error_not_a_panic() {
         let full = encode_response(1, &[issue("teh", 0, IssueCategory::Spelling)]);
         for cut in 0..full.len() {
-            assert!(decode_response(&full[..cut]).is_err(), "cut at {cut} decoded");
+            assert!(
+                decode_response(&full[..cut]).is_err(),
+                "cut at {cut} decoded"
+            );
         }
     }
 
@@ -619,7 +625,10 @@ mod tests {
             "clean text flagged: {issues:?}"
         );
 
-        assert!(read_frame(&mut r).unwrap().is_none(), "extra output after EOF");
+        assert!(
+            read_frame(&mut r).unwrap().is_none(),
+            "extra output after EOF"
+        );
     }
 
     #[test]

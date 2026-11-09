@@ -107,9 +107,7 @@ pub fn run(command: Vec<String>) -> Result<i32> {
     let reader = master
         .try_clone_reader()
         .context("failed to clone PTY reader")?;
-    let writer = master
-        .take_writer()
-        .context("failed to take PTY writer")?;
+    let writer = master.take_writer().context("failed to take PTY writer")?;
     let master: Arc<Mutex<Box<dyn MasterPty + Send>>> = Arc::new(Mutex::new(master));
 
     // One channel, three producers (stdin pump, PTY reader, tick), one
@@ -120,12 +118,18 @@ pub fn run(command: Vec<String>) -> Result<i32> {
     let lint_switch = lints.switch();
 
     spawn_winch_thread(Arc::clone(&master), event_tx.clone());
-    spawn_stdin_pump(writer, event_tx.clone(), lints);
+    let eligibility = Arc::new(Mutex::new(None));
+    spawn_stdin_pump(writer, event_tx.clone(), lints, eligibility.clone());
     spawn_pty_reader(reader, event_tx.clone());
     spawn_tick(event_tx.clone());
     drop(event_tx); // render loop holds the last receiver only
 
-    render_loop(ScreenObserver::new(cols, rows), event_rx, lint_switch);
+    render_loop(
+        ScreenObserver::new(cols, rows),
+        event_rx,
+        lint_switch,
+        eligibility,
+    );
 
     let status = child.wait().context("failed to wait for child")?;
     let exit_code = status.exit_code() as i32;
@@ -176,8 +180,9 @@ fn spawn_stdin_pump(
     writer: Box<dyn Write + Send>,
     event_tx: mpsc::Sender<RenderEvent>,
     lints: LintHandle,
+    eligibility: Eligibility,
 ) {
-    thread::spawn(move || pump_stdin_to_pty(writer, event_tx, lints));
+    thread::spawn(move || pump_stdin_to_pty(writer, event_tx, lints, eligibility));
 }
 
 /// Minimal escape-sequence parser used by the stdin pump while the
@@ -191,7 +196,10 @@ enum EscState {
     SawCsi,
 }
 
+type Eligibility = Arc<Mutex<Option<(String, usize)>>>;
+
 struct PickerCtx {
+    eligibility: Eligibility,
     engaged: Option<crate::picker::Engaged>,
     esc: EscState,
     /// Buffer char count after the most recent buffer-changing keystroke.
@@ -209,6 +217,7 @@ struct PickerCtx {
 impl PickerCtx {
     fn new() -> Self {
         Self {
+            eligibility: Arc::new(Mutex::new(None)),
             engaged: None,
             esc: EscState::Ground,
             last_buffer_chars: None,
@@ -236,6 +245,7 @@ fn pump_stdin_to_pty(
     mut writer: Box<dyn Write + Send>,
     event_tx: mpsc::Sender<RenderEvent>,
     lints: LintHandle,
+    eligibility: Eligibility,
 ) {
     let mut state = InputState::new(lints);
     let debug = DebugLog::from_env();
@@ -243,6 +253,7 @@ fn pump_stdin_to_pty(
     let stdin = std::io::stdin();
     let mut handle = stdin.lock();
     let mut picker = PickerCtx::new();
+    picker.eligibility = eligibility;
     loop {
         match handle.read(&mut buf) {
             Ok(0) => break,
@@ -257,6 +268,7 @@ fn pump_stdin_to_pty(
                 // GH #1. A paste isn't interactive input, so none of the
                 // picker / Tab-fix machinery in `handle_byte` applies.
                 if chunk_looks_like_paste(chunk) {
+                    picker_dismiss(&mut picker, &event_tx);
                     if !handle_paste_chunk(chunk, &mut writer, &mut state, &debug, &mut picker) {
                         break;
                     }
@@ -284,9 +296,7 @@ fn pump_stdin_to_pty(
                 // state. A bare Esc lingers as `SawEsc` until the next
                 // byte arrives; treating it here as "user pressed Esc
                 // alone, no CSI followed" lets us dismiss the picker.
-                if picker.engaged.is_some()
-                    && picker.esc != EscState::Ground
-                {
+                if picker.engaged.is_some() && picker.esc != EscState::Ground {
                     picker_dismiss(&mut picker, &event_tx);
                 }
                 if writer.flush().is_err() {
@@ -448,8 +458,20 @@ fn picker_engage(
     state: &mut InputState,
     picker: &mut PickerCtx,
     event_tx: &mpsc::Sender<RenderEvent>,
+    completion: bool,
 ) -> bool {
     let buffer_cursor = state.buffer().cursor_chars();
+    if completion
+        && !picker
+            .eligibility
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|(text, cursor)| text == state.buffer().text() && *cursor == buffer_cursor)
+    {
+        return false;
+    }
+
     let buffer_chars = state.buffer().text().chars().count();
     // Don't hijack Tab while the user is typing forward at end-of-buffer —
     // that's exactly when the wrapped child (a shell, etc.) wants Tab for
@@ -457,12 +479,18 @@ fn picker_engage(
     // Same gate as the render-side hover tooltip, so Tab engages iff the
     // tooltip is (or would be) showing. See `picker::typing_forward_at_end`
     // and decision #11.
-    if crate::picker::typing_forward_at_end(buffer_cursor, buffer_chars, picker.buffer_shrank) {
+    if !completion
+        && crate::picker::typing_forward_at_end(buffer_cursor, buffer_chars, picker.buffer_shrank)
+    {
         return false;
     }
     // Lints arrive asynchronously; pick only from ones computed for the
     // live buffer.
-    if !state.sync_issues(FIX_SYNC_TIMEOUT) {
+    if !state.sync_issues(if completion {
+        Duration::ZERO
+    } else {
+        FIX_SYNC_TIMEOUT
+    }) {
         return false;
     }
     let grammar_enabled = crate::config::get().grammar_enabled();
@@ -470,6 +498,15 @@ fn picker_engage(
     else {
         return false;
     };
+    if crate::fix::build_fix(
+        state,
+        target,
+        target.suggestions.first().map(String::as_str).unwrap_or(""),
+    )
+    .is_none()
+    {
+        return false;
+    }
     let Some(engaged) = crate::picker::engage_for(target) else {
         return false;
     };
@@ -565,8 +602,39 @@ fn handle_byte(
     // Apply: Enter only. Tab used to apply too, but cycling is more
     // discoverable and Enter is unambiguous for "I picked this one."
     // `tuipo off` arrived while the picker was open: let the keys go.
-    if picker.engaged.is_some() && !state.lints_enabled() {
+    if picker.engaged.is_some()
+        && (!state.lints_enabled()
+            || !picker
+                .eligibility
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|(text, cursor)| {
+                    text == state.buffer().text() && *cursor == state.buffer().cursor_chars()
+                }))
+    {
         picker_dismiss(picker, event_tx);
+    }
+    let direction = crate::config::get().completion_direction(byte);
+    if !state.buffer().in_paste()
+        && let Some(direction) = direction
+    {
+        if picker.engaged.is_some() {
+            if let Some(e) = picker.engaged.as_mut() {
+                e.nav(direction);
+            }
+            picker_resnap(picker, event_tx);
+            return;
+        }
+        if state.lints_enabled() && picker_engage(state, picker, event_tx, true) {
+            if direction < 0
+                && let Some(e) = picker.engaged.as_mut()
+            {
+                e.nav(-1);
+            }
+            picker_resnap(picker, event_tx);
+            return;
+        }
     }
     if picker.engaged.is_some() {
         match (picker.esc, byte) {
@@ -640,7 +708,7 @@ fn handle_byte(
     // without picker still auto-applies the top suggestion.
     if byte == b'\t' && tab_fix_enabled() && state.lints_enabled() {
         if crate::config::get().picker_enabled() {
-            if picker_engage(state, picker, event_tx) {
+            if picker_engage(state, picker, event_tx, false) {
                 return;
             }
         } else {
@@ -663,12 +731,13 @@ fn handle_byte(
     match outcome {
         FeedOutcome::Updated => {
             let cursor_after = state.buffer().cursor();
-            if (byte.is_ascii_graphic() || byte == b' ') && cursor_after > cursor_before {
+            if cursor_after > cursor_before
+                && let Some(ch) = state.buffer().text()[cursor_before..cursor_after]
+                    .chars()
+                    .next()
+            {
                 let char_offset = state.buffer().text()[..cursor_before].chars().count();
-                let _ = event_tx.send(RenderEvent::Input(InputEvent::UserChar {
-                    ch: byte as char,
-                    char_offset,
-                }));
+                let _ = event_tx.send(RenderEvent::Input(InputEvent::UserChar { ch, char_offset }));
             }
             // Track grow/shrink so the next Tab knows whether the user is
             // typing forward (Tab → child completion) or editing back into
@@ -733,20 +802,13 @@ fn apply_fix(
         writer.write_all(&[0x08])?;
         state.feed_bytes(&[0x08]);
     }
-    // Replacement bytes. ASCII-only path (the typed misspellings we fix
-    // are always ASCII; the suggestion text is too).
-    for byte in fix.replacement_text.bytes() {
-        let cursor_before = state.buffer().cursor();
-        state.feed_bytes(&[byte]);
-        let cursor_after = state.buffer().cursor();
-        if (byte.is_ascii_graphic() || byte == b' ') && cursor_after > cursor_before {
-            let char_offset = state.buffer().text()[..cursor_before].chars().count();
-            let _ = event_tx.send(RenderEvent::Input(InputEvent::UserChar {
-                ch: byte as char,
-                char_offset,
-            }));
-        }
-        writer.write_all(&[byte])?;
+    // Forward complete UTF-8 scalars and emit one echo event per scalar.
+    writer.write_all(fix.replacement_text.as_bytes())?;
+    for ch in fix.replacement_text.chars() {
+        let char_offset = state.buffer().cursor_chars();
+        let mut encoded = [0; 4];
+        state.feed_bytes(ch.encode_utf8(&mut encoded).as_bytes());
+        let _ = event_tx.send(RenderEvent::Input(InputEvent::UserChar { ch, char_offset }));
     }
     // Wait for the lint worker to publish the post-fix snapshot (a few ms:
     // the engine is warm, it just produced the lint being fixed). Its
@@ -804,6 +866,7 @@ fn render_loop(
     mut observer: ScreenObserver,
     event_rx: mpsc::Receiver<RenderEvent>,
     lint_switch: LintSwitch,
+    eligibility: Eligibility,
 ) {
     let mut matcher = EchoMatcher::new();
     let mut gate = PaintGate::new();
@@ -867,6 +930,8 @@ fn render_loop(
                 // span tracking; old (row, col) underlines are about to
                 // be overwritten by the host's resize redraw, so we
                 // shouldn't try to clear them via the now-empty grid.
+                overlay_gate.region = None;
+                overlay_gate.set_engaged(None);
                 observer.resize(cols, rows);
                 matcher.clear_screen();
                 gate.mark_dirty();
@@ -998,6 +1063,19 @@ fn render_loop(
             }
             RenderEvent::PtyEof => break,
         }
+        // Only capture completion when the renderer can place a real menu for
+        // this exact text and cursor. No round trip or waiting on input.
+        let eligible = crate::picker::pick_target(matcher.lints(), matcher.buffer_cursor(), false)
+            .and_then(|issue| {
+                let (_, region) = crate::picker::build_overlay(
+                    &crate::picker::RenderTarget::Hover(issue),
+                    &matcher,
+                    observer.state(),
+                    None,
+                );
+                region.map(|_| (matcher.buffer_text().to_string(), matcher.buffer_cursor()))
+            });
+        *eligibility.lock().unwrap() = eligible;
     }
 }
 
@@ -1080,8 +1158,8 @@ mod chunk_paste_tests {
         // Just below the threshold: 6-15 byte chunks ending in CR/LF
         // are still classified as typing. A typist hitting Enter after
         // a few words wouldn't reach 16 bytes per read.
-        assert!(!chunk_looks_like_paste(b"hi there\r"));    // 9 bytes
-        assert!(!chunk_looks_like_paste(b"go on\r\n"));     // 7 bytes
+        assert!(!chunk_looks_like_paste(b"hi there\r")); // 9 bytes
+        assert!(!chunk_looks_like_paste(b"go on\r\n")); // 7 bytes
         assert!(!chunk_looks_like_paste(b"abcdefghijklmn\r")); // 15 bytes
     }
 
@@ -1102,8 +1180,186 @@ mod chunk_paste_tests {
         // still treated as typing — escape sequences and short bursts
         // must not be misclassified.
         assert!(!chunk_looks_like_paste(b"hello world")); // 11 bytes
-        assert!(!chunk_looks_like_paste(b"\x1b[A"));       // arrow key
+        assert!(!chunk_looks_like_paste(b"\x1b[A")); // arrow key
         let mouse = b"\x1b[<35;120;30M"; // SGR mouse report, ~13 bytes
         assert!(!chunk_looks_like_paste(mouse));
+    }
+}
+
+#[cfg(test)]
+mod completion_tests {
+    use super::*;
+
+    #[derive(Clone)]
+    struct Capture(Arc<Mutex<Vec<u8>>>);
+    impl Write for Capture {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn control_navigation_confirmation_escape_and_passthrough() {
+        let capture = Capture(Arc::new(Mutex::new(vec![])));
+        let mut writer: Box<dyn Write + Send> = Box::new(capture.clone());
+        let mut state = InputState::with_checker();
+        state.feed_bytes("превет".as_bytes());
+        let mut picker = PickerCtx::new();
+        *picker.eligibility.lock().unwrap() = Some(("превет".into(), 6));
+        let (tx, _rx) = mpsc::channel();
+        let debug = DebugLog::from_env();
+        let mut failed = false;
+        handle_byte(
+            14,
+            &mut writer,
+            &mut state,
+            &tx,
+            &debug,
+            &mut failed,
+            &mut picker,
+        );
+        assert!(picker.engaged.is_some());
+        assert_eq!(state.buffer().text(), "превет");
+        assert!(capture.0.lock().unwrap().is_empty());
+        let len = picker.engaged.as_ref().unwrap().suggestions.len();
+        handle_byte(
+            16,
+            &mut writer,
+            &mut state,
+            &tx,
+            &debug,
+            &mut failed,
+            &mut picker,
+        );
+        assert_eq!(picker.engaged.as_ref().unwrap().selected, len - 1);
+        handle_byte(
+            14,
+            &mut writer,
+            &mut state,
+            &tx,
+            &debug,
+            &mut failed,
+            &mut picker,
+        );
+        assert_eq!(picker.engaged.as_ref().unwrap().selected, 0);
+        let expected = picker
+            .engaged
+            .as_ref()
+            .unwrap()
+            .selected_suggestion()
+            .to_string();
+        handle_byte(
+            13,
+            &mut writer,
+            &mut state,
+            &tx,
+            &debug,
+            &mut failed,
+            &mut picker,
+        );
+        assert_eq!(state.buffer().text(), expected);
+        assert!(picker.engaged.is_none());
+        assert!(!capture.0.lock().unwrap().contains(&13));
+        // No issue: original host receives both keys.
+        capture.0.lock().unwrap().clear();
+        state.feed_bytes(b"\r");
+        state.feed_bytes(b"hello");
+        for byte in [14, 16] {
+            handle_byte(
+                byte,
+                &mut writer,
+                &mut state,
+                &tx,
+                &debug,
+                &mut failed,
+                &mut picker,
+            );
+        }
+        assert_eq!(*capture.0.lock().unwrap(), [14, 16]);
+        // Escape closes without modifying text (batch finalization in pump).
+        state.feed_bytes(b"\r");
+        state.feed_bytes("превет".as_bytes());
+        *picker.eligibility.lock().unwrap() = Some(("превет".into(), 6));
+        handle_byte(
+            14,
+            &mut writer,
+            &mut state,
+            &tx,
+            &debug,
+            &mut failed,
+            &mut picker,
+        );
+        handle_byte(
+            27,
+            &mut writer,
+            &mut state,
+            &tx,
+            &debug,
+            &mut failed,
+            &mut picker,
+        );
+        picker_dismiss(&mut picker, &tx);
+        assert_eq!(state.buffer().text(), "превет");
+        assert!(picker.engaged.is_none());
+        // Editing invalidates selection and passes the edit through.
+        handle_byte(
+            14,
+            &mut writer,
+            &mut state,
+            &tx,
+            &debug,
+            &mut failed,
+            &mut picker,
+        );
+        handle_byte(
+            b'!',
+            &mut writer,
+            &mut state,
+            &tx,
+            &debug,
+            &mut failed,
+            &mut picker,
+        );
+        assert!(picker.engaged.is_none());
+        assert_eq!(state.buffer().text(), "превет!");
+    }
+
+    #[test]
+    fn no_safe_menu_and_paste_preserve_control_keys() {
+        let capture = Capture(Arc::new(Mutex::new(vec![])));
+        let mut writer: Box<dyn Write + Send> = Box::new(capture.clone());
+        let mut state = InputState::with_checker();
+        state.feed_bytes("превет".as_bytes());
+        let mut picker = PickerCtx::new();
+        let (tx, _rx) = mpsc::channel();
+        let debug = DebugLog::from_env();
+        let mut failed = false;
+        handle_byte(
+            14,
+            &mut writer,
+            &mut state,
+            &tx,
+            &debug,
+            &mut failed,
+            &mut picker,
+        );
+        assert!(picker.engaged.is_none());
+        *picker.eligibility.lock().unwrap() = Some(("превет".into(), 6));
+        state.feed_bytes(b"\x1b[200~");
+        handle_byte(
+            16,
+            &mut writer,
+            &mut state,
+            &tx,
+            &debug,
+            &mut failed,
+            &mut picker,
+        );
+        assert!(picker.engaged.is_none());
+        assert_eq!(*capture.0.lock().unwrap(), [14, 16]);
     }
 }

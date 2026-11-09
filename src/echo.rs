@@ -200,11 +200,8 @@ impl EchoMatcher {
         if target_remove == 0 {
             return;
         }
-        let mut by_seq: Vec<((u16, u16), u64)> = self
-            .cell_seq
-            .iter()
-            .map(|(&k, &v)| (k, v))
-            .collect();
+        let mut by_seq: Vec<((u16, u16), u64)> =
+            self.cell_seq.iter().map(|(&k, &v)| (k, v)).collect();
         by_seq.sort_by_key(|&(_, seq)| seq);
         for (key, _) in by_seq.iter().take(target_remove) {
             self.grid.remove(key);
@@ -466,10 +463,7 @@ fn find_text_in_grid(
         }
 
         let mut all_match = true;
-        let mut max_seq = cell_seq
-            .get(&(start_row, base_col))
-            .copied()
-            .unwrap_or(0);
+        let mut max_seq = cell_seq.get(&(start_row, base_col)).copied().unwrap_or(0);
         let mut row = start_row;
         let mut col = base_col + 1;
         let mut row_start = base_col;
@@ -489,13 +483,11 @@ fn find_text_in_grid(
             }
 
             if cell_ok(row, col, target_ch) {
-                max_seq =
-                    max_seq.max(cell_seq.get(&(row, col)).copied().unwrap_or(0));
+                max_seq = max_seq.max(cell_seq.get(&(row, col)).copied().unwrap_or(0));
                 col += 1;
             } else if just_wrapped && row_start > 0 && cell_ok(row, 0, target_ch) {
                 row_start = 0;
-                max_seq =
-                    max_seq.max(cell_seq.get(&(row, 0)).copied().unwrap_or(0));
+                max_seq = max_seq.max(cell_seq.get(&(row, 0)).copied().unwrap_or(0));
                 col = 1;
             } else if grid.get(&(row, col)).is_none() {
                 let next_row = match row.checked_add(1) {
@@ -508,15 +500,13 @@ fn find_text_in_grid(
                 if cell_ok(next_row, base_col, target_ch) {
                     row = next_row;
                     row_start = base_col;
-                    max_seq = max_seq.max(
-                        cell_seq.get(&(next_row, base_col)).copied().unwrap_or(0),
-                    );
+                    max_seq =
+                        max_seq.max(cell_seq.get(&(next_row, base_col)).copied().unwrap_or(0));
                     col = base_col + 1;
                 } else if base_col > 0 && cell_ok(next_row, 0, target_ch) {
                     row = next_row;
                     row_start = 0;
-                    max_seq = max_seq
-                        .max(cell_seq.get(&(next_row, 0)).copied().unwrap_or(0));
+                    max_seq = max_seq.max(cell_seq.get(&(next_row, 0)).copied().unwrap_or(0));
                     col = 1;
                 } else {
                     all_match = false;
@@ -583,8 +573,14 @@ mod tests {
     #[test]
     fn paired_user_then_print_records_position() {
         let mut m = EchoMatcher::new();
-        m.apply_input(InputEvent::UserChar { ch: 'h', char_offset: 0 });
-        m.apply_print(&PrintEvent { ch: 'h', at: pos(0, 5) });
+        m.apply_input(InputEvent::UserChar {
+            ch: 'h',
+            char_offset: 0,
+        });
+        m.apply_print(&PrintEvent {
+            ch: 'h',
+            at: pos(0, 5),
+        });
         assert_eq!(m.position_of(0), Some(pos(0, 5)));
         assert_eq!(m.pending_len(), 0);
     }
@@ -592,10 +588,22 @@ mod tests {
     #[test]
     fn multiple_chars_pair_in_order() {
         let mut m = EchoMatcher::new();
-        m.apply_input(InputEvent::UserChar { ch: 'h', char_offset: 0 });
-        m.apply_input(InputEvent::UserChar { ch: 'i', char_offset: 1 });
-        m.apply_print(&PrintEvent { ch: 'h', at: pos(0, 5) });
-        m.apply_print(&PrintEvent { ch: 'i', at: pos(0, 6) });
+        m.apply_input(InputEvent::UserChar {
+            ch: 'h',
+            char_offset: 0,
+        });
+        m.apply_input(InputEvent::UserChar {
+            ch: 'i',
+            char_offset: 1,
+        });
+        m.apply_print(&PrintEvent {
+            ch: 'h',
+            at: pos(0, 5),
+        });
+        m.apply_print(&PrintEvent {
+            ch: 'i',
+            at: pos(0, 6),
+        });
         assert_eq!(m.position_of(0), Some(pos(0, 5)));
         assert_eq!(m.position_of(1), Some(pos(0, 6)));
     }
@@ -603,7 +611,10 @@ mod tests {
     #[test]
     fn print_with_no_pending_is_ignored() {
         let mut m = EchoMatcher::new();
-        m.apply_print(&PrintEvent { ch: 'x', at: pos(0, 0) });
+        m.apply_print(&PrintEvent {
+            ch: 'x',
+            at: pos(0, 0),
+        });
         // No user char was waiting — this is chrome, not echo. Ignored.
         assert_eq!(m.known_positions(), 0);
     }
@@ -611,11 +622,24 @@ mod tests {
     #[test]
     fn chrome_print_between_user_chars_is_skipped_not_mismatched() {
         let mut m = EchoMatcher::new();
-        m.apply_input(InputEvent::UserChar { ch: 'h', char_offset: 0 });
+        m.apply_input(InputEvent::UserChar {
+            ch: 'h',
+            char_offset: 0,
+        });
         // Chrome character — does not match 'h', should leave pending alone.
-        m.apply_print(&PrintEvent { ch: '>', at: pos(0, 0) });
-        assert_eq!(m.pending_len(), 1, "mismatched print should not drain pending");
-        m.apply_print(&PrintEvent { ch: 'h', at: pos(0, 2) });
+        m.apply_print(&PrintEvent {
+            ch: '>',
+            at: pos(0, 0),
+        });
+        assert_eq!(
+            m.pending_len(),
+            1,
+            "mismatched print should not drain pending"
+        );
+        m.apply_print(&PrintEvent {
+            ch: 'h',
+            at: pos(0, 2),
+        });
         assert_eq!(m.position_of(0), Some(pos(0, 2)));
     }
 
@@ -626,8 +650,14 @@ mod tests {
         // echoes would have nothing to match. Boundary stays "soft" — it
         // marks the end of input but keeps pending/positions alive.
         let mut m = EchoMatcher::new();
-        m.apply_input(InputEvent::UserChar { ch: 'h', char_offset: 0 });
-        m.apply_print(&PrintEvent { ch: 'h', at: pos(0, 5) });
+        m.apply_input(InputEvent::UserChar {
+            ch: 'h',
+            char_offset: 0,
+        });
+        m.apply_print(&PrintEvent {
+            ch: 'h',
+            at: pos(0, 5),
+        });
         m.apply_input(InputEvent::Boundary);
         assert_eq!(
             m.position_of(0),
@@ -639,11 +669,20 @@ mod tests {
     #[test]
     fn next_user_char_after_boundary_clears_old_session() {
         let mut m = EchoMatcher::new();
-        m.apply_input(InputEvent::UserChar { ch: 'h', char_offset: 0 });
-        m.apply_print(&PrintEvent { ch: 'h', at: pos(0, 5) });
+        m.apply_input(InputEvent::UserChar {
+            ch: 'h',
+            char_offset: 0,
+        });
+        m.apply_print(&PrintEvent {
+            ch: 'h',
+            at: pos(0, 5),
+        });
         m.apply_input(InputEvent::Boundary);
         // New session begins:
-        m.apply_input(InputEvent::UserChar { ch: 'a', char_offset: 0 });
+        m.apply_input(InputEvent::UserChar {
+            ch: 'a',
+            char_offset: 0,
+        });
         assert_eq!(m.position_of(0), None, "old session cleared on new input");
         assert_eq!(m.pending_len(), 1);
     }
@@ -651,8 +690,14 @@ mod tests {
     #[test]
     fn explicit_reset_clears_everything() {
         let mut m = EchoMatcher::new();
-        m.apply_input(InputEvent::UserChar { ch: 'h', char_offset: 0 });
-        m.apply_print(&PrintEvent { ch: 'h', at: pos(0, 5) });
+        m.apply_input(InputEvent::UserChar {
+            ch: 'h',
+            char_offset: 0,
+        });
+        m.apply_print(&PrintEvent {
+            ch: 'h',
+            at: pos(0, 5),
+        });
         m.reset();
         assert_eq!(m.position_of(0), None);
         assert_eq!(m.pending_len(), 0);
@@ -669,12 +714,18 @@ mod tests {
         m.apply_input(InputEvent::Boundary);
         // Now the echoes finally arrive:
         for (i, ch) in "hi teh".chars().enumerate() {
-            m.apply_print(&PrintEvent { ch, at: pos(0, i as u16) });
+            m.apply_print(&PrintEvent {
+                ch,
+                at: pos(0, i as u16),
+            });
         }
         // All six positions should have been mapped despite the Boundary in
         // between.
         for i in 0..6 {
-            assert!(m.position_of(i).is_some(), "missing position for offset {i}");
+            assert!(
+                m.position_of(i).is_some(),
+                "missing position for offset {i}"
+            );
         }
     }
 
@@ -693,7 +744,12 @@ mod tests {
             priority: 50,
             rule: "SpellCheck".into(),
         }];
-        m.apply_input(InputEvent::Lints { issues: issues.clone(), buffer_chars: 3, buffer_text: "teh".into(), buffer_cursor: 0 });
+        m.apply_input(InputEvent::Lints {
+            issues: issues.clone(),
+            buffer_chars: 3,
+            buffer_text: "teh".into(),
+            buffer_cursor: 0,
+        });
         assert_eq!(m.lints().len(), 1);
         assert_eq!(m.lints()[0].word, "teh");
         assert_eq!(m.buffer_chars(), 3);
@@ -714,9 +770,17 @@ mod tests {
             priority: 50,
             rule: "SpellCheck".into(),
         }];
-        m.apply_input(InputEvent::Lints { issues, buffer_chars: 3, buffer_text: "teh".into(), buffer_cursor: 0 });
+        m.apply_input(InputEvent::Lints {
+            issues,
+            buffer_chars: 3,
+            buffer_text: "teh".into(),
+            buffer_cursor: 0,
+        });
         m.apply_input(InputEvent::Boundary);
-        assert!(m.lints().is_empty(), "lints clear on Boundary (UI ignores old prompt)");
+        assert!(
+            m.lints().is_empty(),
+            "lints clear on Boundary (UI ignores old prompt)"
+        );
     }
 
     #[test]
@@ -728,7 +792,10 @@ mod tests {
         assert_eq!(m.pending_len(), 5);
         // Now the child catches up:
         for (i, ch) in "hello".chars().enumerate() {
-            m.apply_print(&PrintEvent { ch, at: pos(0, i as u16) });
+            m.apply_print(&PrintEvent {
+                ch,
+                at: pos(0, i as u16),
+            });
         }
         assert_eq!(m.pending_len(), 0);
         assert_eq!(m.position_of(2), Some(pos(0, 2)));
@@ -782,9 +849,18 @@ mod tests {
             buffer_cursor: 0,
         });
         // 'a' at col 5, then a gap, then 'b' at col 7, 'c' at col 8.
-        m.apply_print(&PrintEvent { ch: 'a', at: pos(3, 5) });
-        m.apply_print(&PrintEvent { ch: 'b', at: pos(3, 7) });
-        m.apply_print(&PrintEvent { ch: 'c', at: pos(3, 8) });
+        m.apply_print(&PrintEvent {
+            ch: 'a',
+            at: pos(3, 5),
+        });
+        m.apply_print(&PrintEvent {
+            ch: 'b',
+            at: pos(3, 7),
+        });
+        m.apply_print(&PrintEvent {
+            ch: 'c',
+            at: pos(3, 8),
+        });
         assert_eq!(m.find_input_anchor(80), None);
     }
 
@@ -800,9 +876,18 @@ mod tests {
             buffer_text: "abc".into(),
             buffer_cursor: 0,
         });
-        m.apply_print(&PrintEvent { ch: 'a', at: pos(3, 79) });
-        m.apply_print(&PrintEvent { ch: 'b', at: pos(4, 0) });
-        m.apply_print(&PrintEvent { ch: 'c', at: pos(4, 1) });
+        m.apply_print(&PrintEvent {
+            ch: 'a',
+            at: pos(3, 79),
+        });
+        m.apply_print(&PrintEvent {
+            ch: 'b',
+            at: pos(4, 0),
+        });
+        m.apply_print(&PrintEvent {
+            ch: 'c',
+            at: pos(4, 1),
+        });
         assert_eq!(
             m.find_input_anchor(80),
             Some(pos(3, 79)),
@@ -867,7 +952,11 @@ mod tests {
                 at: pos(row, col),
             });
         }
-        assert!(m.grid_len() <= GRID_CAP, "grid grew past cap: {}", m.grid_len());
+        assert!(
+            m.grid_len() <= GRID_CAP,
+            "grid grew past cap: {}",
+            m.grid_len()
+        );
     }
 
     #[test]
@@ -884,13 +973,28 @@ mod tests {
             buffer_text: "Write".into(),
             buffer_cursor: 0,
         });
-        m.apply_print(&PrintEvent { ch: 'W', at: pos(5, 2) });
+        m.apply_print(&PrintEvent {
+            ch: 'W',
+            at: pos(5, 2),
+        });
         feed_prints(&mut m, 1, 0, "banner row chunk");
-        m.apply_print(&PrintEvent { ch: 'r', at: pos(5, 3) });
+        m.apply_print(&PrintEvent {
+            ch: 'r',
+            at: pos(5, 3),
+        });
         feed_prints(&mut m, 8, 0, "footer row chunk");
-        m.apply_print(&PrintEvent { ch: 'i', at: pos(5, 4) });
-        m.apply_print(&PrintEvent { ch: 't', at: pos(5, 5) });
-        m.apply_print(&PrintEvent { ch: 'e', at: pos(5, 6) });
+        m.apply_print(&PrintEvent {
+            ch: 'i',
+            at: pos(5, 4),
+        });
+        m.apply_print(&PrintEvent {
+            ch: 't',
+            at: pos(5, 5),
+        });
+        m.apply_print(&PrintEvent {
+            ch: 'e',
+            at: pos(5, 6),
+        });
         assert_eq!(m.find_input_anchor(80), Some(pos(5, 2)));
     }
 
@@ -961,7 +1065,11 @@ mod tests {
             buffer_text: "cde".into(),
             buffer_cursor: 0,
         });
-        assert_eq!(m.find_input_anchor(80), None, "erased range must not anchor");
+        assert_eq!(
+            m.find_input_anchor(80),
+            None,
+            "erased range must not anchor"
+        );
     }
 
     #[test]
@@ -1040,8 +1148,14 @@ mod tests {
         // Place only the letter cells; col 9 (the space) is intentionally
         // skipped — no PrintEvent.
         for &(col, ch) in &[
-            (4u16, 'w'), (5, 'r'), (6, 'i'), (7, 't'), (8, 'e'),
-            (10, 't'), (11, 'e'), (12, 'h'),
+            (4u16, 'w'),
+            (5, 'r'),
+            (6, 'i'),
+            (7, 't'),
+            (8, 'e'),
+            (10, 't'),
+            (11, 'e'),
+            (12, 'h'),
         ] {
             m.apply_print(&PrintEvent {
                 ch,
@@ -1070,7 +1184,10 @@ mod tests {
             (7, '\u{a0}'),
             (8, 'c'),
         ] {
-            m.apply_print(&PrintEvent { ch, at: pos(3, col) });
+            m.apply_print(&PrintEvent {
+                ch,
+                at: pos(3, col),
+            });
         }
         assert_eq!(m.find_input_anchor(80), Some(pos(3, 4)));
     }
@@ -1231,11 +1348,24 @@ mod tests {
         // Row 5: "hello world" at cols 2..12 (space at 7 cursor-skipped)
         // Row 6: "foo" at cols 2..4
         for &(row, col, ch) in &[
-            (5u16, 2u16, 'h'), (5, 3, 'e'), (5, 4, 'l'), (5, 5, 'l'), (5, 6, 'o'),
-            (5, 8, 'w'), (5, 9, 'o'), (5, 10, 'r'), (5, 11, 'l'), (5, 12, 'd'),
-            (6, 2, 'f'), (6, 3, 'o'), (6, 4, 'o'),
+            (5u16, 2u16, 'h'),
+            (5, 3, 'e'),
+            (5, 4, 'l'),
+            (5, 5, 'l'),
+            (5, 6, 'o'),
+            (5, 8, 'w'),
+            (5, 9, 'o'),
+            (5, 10, 'r'),
+            (5, 11, 'l'),
+            (5, 12, 'd'),
+            (6, 2, 'f'),
+            (6, 3, 'o'),
+            (6, 4, 'o'),
         ] {
-            m.apply_print(&PrintEvent { ch, at: pos(row, col) });
+            m.apply_print(&PrintEvent {
+                ch,
+                at: pos(row, col),
+            });
         }
         assert_eq!(
             m.find_input_anchor(16),
@@ -1257,9 +1387,18 @@ mod tests {
         });
         // 'a' at col 10, gap, 'b','c' at col 5,6 of next row —
         // neither base_col (10) nor col 0.
-        m.apply_print(&PrintEvent { ch: 'a', at: pos(3, 10) });
-        m.apply_print(&PrintEvent { ch: 'b', at: pos(4, 5) });
-        m.apply_print(&PrintEvent { ch: 'c', at: pos(4, 6) });
+        m.apply_print(&PrintEvent {
+            ch: 'a',
+            at: pos(3, 10),
+        });
+        m.apply_print(&PrintEvent {
+            ch: 'b',
+            at: pos(4, 5),
+        });
+        m.apply_print(&PrintEvent {
+            ch: 'c',
+            at: pos(4, 6),
+        });
         assert_eq!(
             m.find_input_anchor(80),
             None,
@@ -1280,10 +1419,22 @@ mod tests {
         });
         // 'a' at (3, 5), 'X' at (3, 6) — wrong char, not a gap.
         // Even if 'b' exists on the next row, we must NOT jump.
-        m.apply_print(&PrintEvent { ch: 'a', at: pos(3, 5) });
-        m.apply_print(&PrintEvent { ch: 'X', at: pos(3, 6) });
-        m.apply_print(&PrintEvent { ch: 'b', at: pos(4, 5) });
-        m.apply_print(&PrintEvent { ch: 'c', at: pos(4, 6) });
+        m.apply_print(&PrintEvent {
+            ch: 'a',
+            at: pos(3, 5),
+        });
+        m.apply_print(&PrintEvent {
+            ch: 'X',
+            at: pos(3, 6),
+        });
+        m.apply_print(&PrintEvent {
+            ch: 'b',
+            at: pos(4, 5),
+        });
+        m.apply_print(&PrintEvent {
+            ch: 'c',
+            at: pos(4, 6),
+        });
         assert_eq!(
             m.find_input_anchor(80),
             None,
@@ -1304,14 +1455,33 @@ mod tests {
         });
         // 14-col screen, text at col 2. Spaces are cursor-skipped.
         for &(row, col, ch) in &[
-            (5u16, 2u16, 'h'), (5, 3, 'e'), (5, 4, 'l'), (5, 5, 'l'), (5, 6, 'o'),
-            (5, 8, 'w'), (5, 9, 'o'), (5, 10, 'r'), (5, 11, 'l'), (5, 12, 'd'),
-            (6, 2, 'f'), (6, 3, 'o'), (6, 4, 'o'),
-            (6, 6, 'b'), (6, 7, 'a'), (6, 8, 'r'),
-            (6, 10, 'b'), (6, 11, 'a'), (6, 12, 'z'),
-            (7, 2, 'q'), (7, 3, 'u'), (7, 4, 'x'),
+            (5u16, 2u16, 'h'),
+            (5, 3, 'e'),
+            (5, 4, 'l'),
+            (5, 5, 'l'),
+            (5, 6, 'o'),
+            (5, 8, 'w'),
+            (5, 9, 'o'),
+            (5, 10, 'r'),
+            (5, 11, 'l'),
+            (5, 12, 'd'),
+            (6, 2, 'f'),
+            (6, 3, 'o'),
+            (6, 4, 'o'),
+            (6, 6, 'b'),
+            (6, 7, 'a'),
+            (6, 8, 'r'),
+            (6, 10, 'b'),
+            (6, 11, 'a'),
+            (6, 12, 'z'),
+            (7, 2, 'q'),
+            (7, 3, 'u'),
+            (7, 4, 'x'),
         ] {
-            m.apply_print(&PrintEvent { ch, at: pos(row, col) });
+            m.apply_print(&PrintEvent {
+                ch,
+                at: pos(row, col),
+            });
         }
         assert_eq!(
             m.find_input_anchor(14),

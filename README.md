@@ -17,6 +17,70 @@ Code, Codex, Aider, and any other terminal app.
 
 </div>
 
+## Russian + English fork
+
+This local fork keeps the CLI name `tuipo`. Both `ru_RU` and `en_US` are enabled
+by default: Harper checks English and Spellbook checks Russian using the bundled
+LibreOffice Hunspell dictionary, including inflections. No network service is
+used at runtime. Russian grammar is outside the scope of this version.
+
+From the repository:
+
+```sh
+cargo build --release
+./target/release/tuipo -- codex
+# or wrap an interactive shell
+./target/release/tuipo -- zsh
+```
+
+After typing `превет world `, wait briefly, then move the cursor into `превет`
+or directly after its last letter. **Ctrl+N** opens suggestions; repeated
+**Ctrl+N / Ctrl+P** cycle in either direction. **Enter** confirms; **Escape**
+closes without editing. Opening and cycling never alter text. Ctrl+P opens at
+the last suggestion. Typing dismisses stale suggestions. Tab keeps its original
+behavior unless the existing `tab_fix` / `picker` options are enabled.
+
+Keys pass through when no fresh issue, usable replacement or safe menu position
+is available. The first key during engine startup may therefore reach the host;
+wait for the underline before retrying. Host shortcuts necessarily conflict
+while a spelling menu is active. Full Codex / Zsh key compatibility and visual
+behavior in Terminal.app still require the [manual checks](docs/RUSSIAN.md).
+Terminal.app uses the existing plain underline automatically.
+
+Configuration remains in `$XDG_CONFIG_HOME/tuipo/config.toml`, otherwise
+`~/.config/tuipo/config.toml`. All old options remain supported:
+
+```toml
+languages = ["ru_RU", "en_US"]
+interactive = true
+highlight_only = false
+next_key = "ctrl+n"
+previous_key = "ctrl+p"
+pause_ms = 150
+underline = "auto"
+# Optional UTF-8 Hunspell pair (both should be supplied together):
+# russian_aff_path = "/absolute/path/ru_RU.aff"
+# russian_dic_path = "/absolute/path/ru_RU.dic"
+# One exception per line; # comments allowed, case-insensitive:
+# dict_path = "~/my-tuipo-dict.txt"
+```
+
+`interactive = false` disables the new shortcuts. `highlight_only = true` also
+disables the legacy Tab correction and hover picker. Configurable keys use
+`ctrl+a` through `ctrl+z`; avoid keys such as Ctrl+C, Ctrl+I (Tab), Ctrl+M (Enter)
+and Ctrl+[ used by the terminal. Settings are read at startup. The configuration
+TUI preserves the new settings; edit the TOML to change them.
+
+The dictionary accepts common е/ё variants without changing the text automatically;
+explicit ё stays meaningful. Unknown names, new slang and words distinguished only
+by context may need exceptions. URLs, paths, flags, common CLI names, identifiers
+and backtick code are filtered heuristically; arbitrary shell commands cannot
+always be distinguished from prose.
+
+See [implementation, limitations and manual tests](docs/RUSSIAN.md).
+The original project's documentation follows; its default-off picker statements
+refer to the legacy hover/Tab picker, not the new explicit shortcuts.
+
 ## Why I made this
 
 I type a lot of prose into terminal apps — long prompts for **Claude Code**, **Codex** and other
@@ -239,3 +303,51 @@ Unless you say otherwise, anything you contribute is licensed the same way.
 ---
 
 <sub>tuipo is an independent project and isn't affiliated with, endorsed by, or sponsored by Grammarly, Anthropic (Claude), or anyone else mentioned here. Those names are only used to describe what tuipo works with, or — for "Grammarly for your terminal" — to give a quick feel for what it does. It's not the same engine or feature set. All trademarks belong to their owners.</sub>
+
+## Bundled Russian dictionary license
+
+The following notice also applies to binary distributions containing the bundled Russian dictionary.
+
+```text
+* Copyright (c) 1997-2008, Alexander I. Lebedev
+
+Modifications:
+------------------------------------------------------------------
+2012-08-24: Laszlo Nemeth (nemeth at numbertext org)
+* ru_RU.aff: add TRY line for better suggestions
+  (fix fdo#35001, reported by sasha.libreoffice at gmail)
+
+Copyright:
+------------------------------------------------------------------
+* Copyright (c) 1997-2008, Alexander I. Lebedev
+
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+* Redistributions of source code must retain the above copyright
+  notice, this list of conditions and the following disclaimer.
+* Redistributions in binary form must reproduce the above copyright
+  notice, this list of conditions and the following disclaimer in the
+  documentation and/or other materials provided with the distribution.
+* Modified versions must be clearly marked as such.
+* The name of Alexander I. Lebedev may not be used to endorse or promote
+  products derived from this software without specific prior written
+  permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+
+```
+
+Spellbook is MPL-2.0; see [third-party sources and licenses](assets/ru_RU/SOURCE.md).

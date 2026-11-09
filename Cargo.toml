@@ -29,7 +29,10 @@ harper-core = "=2.0.0"
 portable-pty = "0.9"
 serde = { version = "1", features = ["derive"] }
 signal-hook = "0.3"
+spellbook = "0.4.2"
 toml = { version = "0.8", default-features = false, features = ["parse"] }
+unicode-segmentation = "1"
+unicode-width = "0.2"
 vte = "0.15"
 
 [dev-dependencies]

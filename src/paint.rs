@@ -75,7 +75,9 @@
 
 use std::collections::HashSet;
 use std::io::Write;
-use std::time::{Duration, Instant};
+#[cfg(test)]
+use std::time::Duration;
+use std::time::Instant;
 
 use crate::echo::EchoMatcher;
 use crate::screen::ScreenState;
@@ -84,6 +86,7 @@ use crate::spell::is_actionable_category;
 /// Wait this long after the last user keystroke before painting. ~150ms
 /// matches typical "I've stopped typing and might be looking at the screen"
 /// timing without making the annotation feel laggy.
+#[cfg(test)]
 pub const PAUSE_MS: Duration = Duration::from_millis(150);
 
 /// A span we wrote an underline to last paint. Used to actively undo the
@@ -134,7 +137,7 @@ impl PaintGate {
             return false;
         }
         match self.last_keystroke_at {
-            Some(t) => now.duration_since(t) >= PAUSE_MS,
+            Some(t) => now.duration_since(t) >= crate::config::get().pause_duration(),
             None => true,
         }
     }
@@ -268,7 +271,13 @@ pub fn build_annotations(
         return Vec::new();
     }
     let grammar_enabled = crate::config::get().grammar_enabled();
-    build_annotations_inner(gate, matcher, screen, detect_underline_style(), grammar_enabled)
+    build_annotations_inner(
+        gate,
+        matcher,
+        screen,
+        detect_underline_style(),
+        grammar_enabled,
+    )
 }
 
 fn build_annotations_inner(
@@ -363,7 +372,8 @@ fn build_annotations_inner(
     }
 
     // Paint pass.
-    let mut next_painted: Vec<PaintedSpan> = Vec::with_capacity(new_spans.len() + carry_forward.len());
+    let mut next_painted: Vec<PaintedSpan> =
+        Vec::with_capacity(new_spans.len() + carry_forward.len());
     for span in &new_spans {
         emit_relative_move(&mut out, pen, (span.row, span.col_start));
         out.extend_from_slice(style.open);
@@ -432,6 +442,12 @@ fn compute_new_spans(
     }
 
     let buffer_text = matcher.buffer_text();
+    if buffer_text
+        .chars()
+        .any(|c| c != '\n' && unicode_width::UnicodeWidthChar::width(c) != Some(1))
+    {
+        return Vec::new();
+    }
 
     let lines: Vec<(usize, usize)> = {
         let mut acc = Vec::new();
@@ -484,7 +500,7 @@ fn compute_new_spans(
         if !is_actionable_category(issue.category, grammar_enabled) {
             continue;
         }
-        if issue.suggestions.is_empty() {
+        if issue.suggestions.is_empty() && issue.rule != "RussianSpellCheck" {
             continue;
         }
         if !seen.insert((issue.char_start, issue.char_end)) {
@@ -510,10 +526,7 @@ fn compute_new_spans(
         let Some(ref positions) = line_positions[line_idx] else {
             continue;
         };
-        if local_end == 0
-            || local_start >= positions.len()
-            || local_end > positions.len()
-        {
+        if local_end == 0 || local_start >= positions.len() || local_end > positions.len() {
             continue;
         }
         spans.extend(paint_runs(
@@ -699,6 +712,12 @@ pub fn paint<W: Write>(
     matcher: &EchoMatcher,
     screen: &ScreenState,
 ) -> bool {
+    if gate
+        .last_keystroke_at
+        .is_some_and(|t| t.elapsed() < crate::config::get().pause_duration())
+    {
+        return false;
+    }
     let bytes = build_annotations(gate, matcher, screen);
     if bytes.is_empty() {
         return false;
@@ -746,7 +765,10 @@ mod tests {
         for (i, ch) in text.chars().enumerate() {
             m.apply_print(&PrintEvent {
                 ch,
-                at: CursorPos { row, col: start_col + i as u16 },
+                at: CursorPos {
+                    row,
+                    col: start_col + i as u16,
+                },
             });
         }
     }
@@ -812,22 +834,37 @@ mod tests {
         let s = screen_with_cursor(80, 24, 2, 9);
         let out = paint_plain(&m, &s);
         let st = String::from_utf8_lossy(&out);
-        assert!(st.starts_with("\x1b[4D"), "expected leading left-4 move: {st:?}");
+        assert!(
+            st.starts_with("\x1b[4D"),
+            "expected leading left-4 move: {st:?}"
+        );
         // Plain SGR — `\x1b[4m` underline + `\x1b[24m` reset. NOT the
         // colon-separated forms (Apple Terminal mis-parses them) and NOT
         // a foreground color change.
-        assert!(st.contains("\x1b[4m"), "missing plain-underline SGR: {st:?}");
-        assert!(st.contains("teh\x1b[24m"), "missing underline-off after word: {st:?}");
+        assert!(
+            st.contains("\x1b[4m"),
+            "missing plain-underline SGR: {st:?}"
+        );
+        assert!(
+            st.contains("teh\x1b[24m"),
+            "missing underline-off after word: {st:?}"
+        );
         // Must not use the legacy colon-separated forms.
         assert!(!st.contains("\x1b[4:3m"), "colon-undercurl leaked: {st:?}");
-        assert!(!st.contains("\x1b[58:"), "colon-underline-color leaked: {st:?}");
+        assert!(
+            !st.contains("\x1b[58:"),
+            "colon-underline-color leaked: {st:?}"
+        );
         // Must not use absolute CUP (would target wrong row when the local
         // terminal has scrollback offset from the PTY).
         assert!(!st.contains(";5H"), "absolute CUP leaked: {st:?}");
         assert!(!st.contains(";6H"), "absolute CUP leaked: {st:?}");
         // Must not use ESC 7/8 (shared saved-cursor slot conflicts with child).
         assert!(!st.contains("\x1b7"), "should not save cursor: {st:?}");
-        assert!(!st.contains("\x1b8"), "should not restore via ESC 8: {st:?}");
+        assert!(
+            !st.contains("\x1b8"),
+            "should not restore via ESC 8: {st:?}"
+        );
     }
 
     #[test]
@@ -854,7 +891,10 @@ mod tests {
             false,
         );
         let st = String::from_utf8_lossy(&out);
-        assert!(st.contains("\x1b[4:3m"), "missing curly-underline SGR: {st:?}");
+        assert!(
+            st.contains("\x1b[4:3m"),
+            "missing curly-underline SGR: {st:?}"
+        );
         // Underline color uses T.416 direct color (`58:2::R:G:B`). The
         // empty `::` slot is the canonical color-space designator;
         // palette form (`58:5:N`) was rejected because some terminals
@@ -888,7 +928,10 @@ mod tests {
         let s = screen_with_cursor(80, 24, 7, 16);
         let out = paint_plain(&m, &s);
         let st = String::from_utf8_lossy(&out);
-        assert!(st.starts_with("\x1b[6D"), "expected leading left-6 move: {st:?}");
+        assert!(
+            st.starts_with("\x1b[6D"),
+            "expected leading left-6 move: {st:?}"
+        );
         assert!(st.contains("\x1b[4mthere\x1b[24m"));
     }
 
@@ -913,7 +956,10 @@ mod tests {
         // Col delta -4 → `\x1b[4D`.
         assert!(st.starts_with("\x1b[4D"), "expected left-4 move: {st:?}");
         // The earlier preview row (row 1) must NOT appear in the moves.
-        assert!(!st.contains("\x1b[4A"), "should not move to preview row: {st:?}");
+        assert!(
+            !st.contains("\x1b[4A"),
+            "should not move to preview row: {st:?}"
+        );
     }
 
     #[test]
@@ -934,7 +980,10 @@ mod tests {
         let st = String::from_utf8_lossy(&out);
         assert!(st.contains("\x1b[2A"), "missing up-2 in approach: {st:?}");
         assert!(st.contains("\x1b[2D"), "missing left-2 in approach: {st:?}");
-        assert!(st.ends_with("\x1b[2B\x1b[1D"), "wrong restore trailer: {st:?}");
+        assert!(
+            st.ends_with("\x1b[2B\x1b[1D"),
+            "wrong restore trailer: {st:?}"
+        );
     }
 
     #[test]
@@ -957,7 +1006,10 @@ mod tests {
         });
         feed_history(&mut m, 0, 0, "the is ");
         let out = paint_plain(&m, &screen_with_cursor(80, 24, 0, 7));
-        assert!(out.is_empty(), "non-spelling lints should not paint: {out:?}");
+        assert!(
+            out.is_empty(),
+            "non-spelling lints should not paint: {out:?}"
+        );
     }
 
     #[test]
@@ -1015,7 +1067,10 @@ mod tests {
         });
         feed_history(&mut m, 0, 0, "teh ");
         let out = paint_plain(&m, &screen_with_cursor(80, 24, 0, 4));
-        assert!(out.is_empty(), "lint without suggestions should not paint: {out:?}");
+        assert!(
+            out.is_empty(),
+            "lint without suggestions should not paint: {out:?}"
+        );
     }
 
     #[test]
@@ -1133,9 +1188,18 @@ mod tests {
         // Overwrite the changed cells in the grid (Claude's echo of the
         // retyped chars). The "rea" cells at 0..2 keep their old chars,
         // which still have our underline attribute on screen.
-        m.apply_print(&PrintEvent { ch: 's', at: CursorPos { row: 0, col: 3 } });
-        m.apply_print(&PrintEvent { ch: 'o', at: CursorPos { row: 0, col: 4 } });
-        m.apply_print(&PrintEvent { ch: 'n', at: CursorPos { row: 0, col: 5 } });
+        m.apply_print(&PrintEvent {
+            ch: 's',
+            at: CursorPos { row: 0, col: 3 },
+        });
+        m.apply_print(&PrintEvent {
+            ch: 'o',
+            at: CursorPos { row: 0, col: 4 },
+        });
+        m.apply_print(&PrintEvent {
+            ch: 'n',
+            at: CursorPos { row: 0, col: 5 },
+        });
 
         let out2 = build_annotations_with(
             &mut g,
@@ -1192,7 +1256,14 @@ mod tests {
             buffer_cursor: 0,
         });
         feed_history(&mut m, 0, 0, "teh ");
-        let _ = build_annotations_with(&mut g, &m, &screen_with_cursor(80, 24, 0, 4), true, PLAIN, false);
+        let _ = build_annotations_with(
+            &mut g,
+            &m,
+            &screen_with_cursor(80, 24, 0, 4),
+            true,
+            PLAIN,
+            false,
+        );
         assert_eq!(g.painted_len(), 1);
         g.forget_painted();
         assert_eq!(g.painted_len(), 0);
@@ -1217,7 +1288,14 @@ mod tests {
         });
         feed_history(&mut m, 0, 0, "teh ");
         let mut g = PaintGate::new();
-        let _ = build_annotations_with(&mut g, &m, &screen_with_cursor(80, 24, 0, 4), true, PLAIN, false);
+        let _ = build_annotations_with(
+            &mut g,
+            &m,
+            &screen_with_cursor(80, 24, 0, 4),
+            true,
+            PLAIN,
+            false,
+        );
         assert_eq!(g.painted_len(), 1);
 
         // Lint goes away AND the grid loses the relevant cells (mimics
@@ -1231,22 +1309,43 @@ mod tests {
         });
         m.clear_screen();
 
-        let out = build_annotations_with(&mut g, &m, &screen_with_cursor(80, 24, 0, 4), true, PLAIN, false);
+        let out = build_annotations_with(
+            &mut g,
+            &m,
+            &screen_with_cursor(80, 24, 0, 4),
+            true,
+            PLAIN,
+            false,
+        );
         // No bytes are emitted (grid empty → no chars to rewrite), but
         // the span is RETAINED in tracking so the next paint cycle can
         // retry once the grid fills in.
-        assert!(out.is_empty(), "should emit nothing when grid is empty: {out:?}");
+        assert!(
+            out.is_empty(),
+            "should emit nothing when grid is empty: {out:?}"
+        );
         assert_eq!(g.painted_len(), 1, "stale span carried forward for retry");
 
         // Refill the grid (simulates the replacement chars echoing back).
         feed_history(&mut m, 0, 0, "the ");
-        let out2 = build_annotations_with(&mut g, &m, &screen_with_cursor(80, 24, 0, 4), true, PLAIN, false);
+        let out2 = build_annotations_with(
+            &mut g,
+            &m,
+            &screen_with_cursor(80, 24, 0, 4),
+            true,
+            PLAIN,
+            false,
+        );
         let st = String::from_utf8_lossy(&out2);
         assert!(
             st.contains("\x1b[24m"),
             "second pass should emit the deferred clear: {st:?}"
         );
-        assert_eq!(g.painted_len(), 0, "carry-forward should clear once grid is whole");
+        assert_eq!(
+            g.painted_len(),
+            0,
+            "carry-forward should clear once grid is whole"
+        );
     }
 
     #[test]
@@ -1264,7 +1363,14 @@ mod tests {
         });
         feed_history(&mut m, 0, 0, "abcdef ");
         let mut g = PaintGate::new();
-        let _ = build_annotations_with(&mut g, &m, &screen_with_cursor(80, 24, 0, 7), true, PLAIN, false);
+        let _ = build_annotations_with(
+            &mut g,
+            &m,
+            &screen_with_cursor(80, 24, 0, 7),
+            true,
+            PLAIN,
+            false,
+        );
         assert_eq!(g.painted_len(), 1);
 
         // Lint goes away and only the first half of the span is still
@@ -1277,7 +1383,14 @@ mod tests {
         });
         m.erase_cells(0, 3, 7);
 
-        let out = build_annotations_with(&mut g, &m, &screen_with_cursor(80, 24, 0, 7), true, PLAIN, false);
+        let out = build_annotations_with(
+            &mut g,
+            &m,
+            &screen_with_cursor(80, 24, 0, 7),
+            true,
+            PLAIN,
+            false,
+        );
         let st = String::from_utf8_lossy(&out);
         // First run "abc" should have been cleared.
         assert!(
@@ -1293,7 +1406,10 @@ mod tests {
         let mut g = PaintGate::new();
         g.mark_keystroke();
         let now = Instant::now();
-        assert!(!g.should_paint(now), "should not paint right after keystroke");
+        assert!(
+            !g.should_paint(now),
+            "should not paint right after keystroke"
+        );
     }
 
     #[test]
@@ -1467,8 +1583,12 @@ mod tests {
         assert_eq!(
             underlined_cells(&out, (0, 16)),
             vec![
-                (0, 4, 't'), (0, 5, 'h'), (0, 6, 'e'),
-                (0, 8, 't'), (0, 9, 'h'), (0, 10, 'e'),
+                (0, 4, 't'),
+                (0, 5, 'h'),
+                (0, 6, 'e'),
+                (0, 8, 't'),
+                (0, 9, 'h'),
+                (0, 10, 'e'),
             ],
         );
     }
@@ -1502,7 +1622,10 @@ mod tests {
             buffer_cursor: 8,
         });
         let clear = build_annotations_with(&mut g, &m, &screen, true, PLAIN, false);
-        assert!(String::from_utf8_lossy(&clear).contains("\x1b[24mthe"), "{clear:?}");
+        assert!(
+            String::from_utf8_lossy(&clear).contains("\x1b[24mthe"),
+            "{clear:?}"
+        );
         assert_eq!(g.painted_len(), 0, "clear must complete, not carry forward");
     }
 
@@ -1637,8 +1760,16 @@ mod tests {
         });
         // Row 5: "hello world" — space at col 7 cursor-skipped
         for &(col, ch) in &[
-            (2u16, 'h'), (3, 'e'), (4, 'l'), (5, 'l'), (6, 'o'),
-            (8, 'w'), (9, 'o'), (10, 'r'), (11, 'l'), (12, 'd'),
+            (2u16, 'h'),
+            (3, 'e'),
+            (4, 'l'),
+            (5, 'l'),
+            (6, 'o'),
+            (8, 'w'),
+            (9, 'o'),
+            (10, 'r'),
+            (11, 'l'),
+            (12, 'd'),
         ] {
             m.apply_print(&PrintEvent {
                 ch,
@@ -1647,8 +1778,12 @@ mod tests {
         }
         // Row 6: "teh end " — space at col 5 cursor-skipped
         for &(col, ch) in &[
-            (2u16, 't'), (3, 'e'), (4, 'h'),
-            (6, 'e'), (7, 'n'), (8, 'd'),
+            (2u16, 't'),
+            (3, 'e'),
+            (4, 'h'),
+            (6, 'e'),
+            (7, 'n'),
+            (8, 'd'),
         ] {
             m.apply_print(&PrintEvent {
                 ch,

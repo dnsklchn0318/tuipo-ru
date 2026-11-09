@@ -69,6 +69,8 @@ pub struct Engaged {
 impl Engaged {
     pub fn snapshot(&self) -> PickerSnapshot {
         PickerSnapshot {
+            char_start: self.target_char_start,
+            char_end: self.target_char_end,
             target: self.target_word.clone(),
             suggestions: self.suggestions.clone(),
             selected: self.selected,
@@ -94,14 +96,15 @@ impl Engaged {
 /// Build engaged state from a lint. Returns None if the issue has no
 /// suggestions (we never engage on an unactionable lint).
 pub fn engage_for(issue: &SpellIssue) -> Option<Engaged> {
-    if issue.suggestions.is_empty() {
+    let suggestions = crate::fix::top_suggestions(issue, 8);
+    if suggestions.is_empty() {
         return None;
     }
     Some(Engaged {
         target_char_start: issue.char_start,
         target_char_end: issue.char_end,
         target_word: issue.word.clone(),
-        suggestions: issue.suggestions.clone(),
+        suggestions,
         selected: 0,
     })
 }
@@ -298,6 +301,13 @@ pub fn build_overlay(
         ),
     };
 
+    if matcher
+        .buffer_text()
+        .chars()
+        .any(|c| c != '\n' && unicode_width::UnicodeWidthChar::width(c) != Some(1))
+    {
+        return (build_restore(prior_region, matcher, screen), None);
+    }
     if suggestions.is_empty() {
         let bytes = build_restore(prior_region, matcher, screen);
         return (bytes, None);
@@ -316,13 +326,24 @@ pub fn build_overlay(
     // (Engaged carries char_start/char_end in stdin's Engaged struct; hover
     // already has the lint. For both we can match by word + position via
     // matcher.lints.)
-    let lint = matcher
-        .lints()
-        .iter()
-        .find(|l| l.word == target_word)
-        .or_else(|| matcher.lints().first());
+    let lint = matcher.lints().iter().find(|l| {
+        l.word == target_word
+            && match target {
+                RenderTarget::Engaged(snap) => {
+                    l.char_start == snap.char_start && l.char_end == snap.char_end
+                }
+                RenderTarget::Hover(issue) => {
+                    l.char_start == issue.char_start && l.char_end == issue.char_end
+                }
+            }
+    });
+    if lint.is_none() {
+        return (build_restore(prior_region, matcher, screen), None);
+    }
     let char_start = lint.map(|l| l.char_start).unwrap_or(0);
-    let char_end = lint.map(|l| l.char_end).unwrap_or(target_word.chars().count());
+    let char_end = lint
+        .map(|l| l.char_end)
+        .unwrap_or(target_word.chars().count());
 
     // Multi-line buffer support: last_line_offset > 0 when the buffer
     // contains '\n' (typical after a bracketed paste). The anchor is
@@ -338,6 +359,9 @@ pub fn build_overlay(
     let local_char_start = char_start - last_line_offset;
     let local_char_end = char_end - last_line_offset;
 
+    if usize::from(anchor.col) + local_char_end > usize::from(screen.cols) {
+        return (build_restore(prior_region, matcher, screen), None);
+    }
     let word_col_start = anchor.col.saturating_add_signed(local_char_start as i16);
     let word_col_end = anchor.col.saturating_add_signed(local_char_end as i16);
     let anchor_row = anchor.row;
@@ -347,19 +371,23 @@ pub fn build_overlay(
 
     // Try inline-right first: just after the word + a 1-col gap.
     let inline_col = word_col_end.saturating_add(1);
-    let (place_row, place_col) = if inline_col + content_width <= screen.cols
-        && anchor_row < screen.rows
-    {
-        (anchor_row, inline_col)
-    } else if anchor_row > 0 && word_col_start + content_width <= screen.cols {
-        // Fall back to the row above the anchor, left-aligned with the word.
-        (anchor_row - 1, word_col_start)
-    } else {
-        // No safe place. Skip and restore any prior overlay.
-        let bytes = build_restore(prior_region, matcher, screen);
-        return (bytes, None);
-    };
+    let (place_row, place_col) =
+        if inline_col + content_width <= screen.cols && anchor_row < screen.rows {
+            (anchor_row, inline_col)
+        } else if anchor_row > 0 && word_col_start + content_width <= screen.cols {
+            // Fall back to the row above the anchor, left-aligned with the word.
+            (anchor_row - 1, word_col_start)
+        } else {
+            // No safe place. Skip and restore any prior overlay.
+            let bytes = build_restore(prior_region, matcher, screen);
+            return (bytes, None);
+        };
 
+    if (place_col..place_col + content_width)
+        .any(|col| matcher.cell_at(place_row, col).is_some_and(|c| c != ' '))
+    {
+        return (build_restore(prior_region, matcher, screen), None);
+    }
     let new_region = OverlayRegion {
         row: place_row,
         col_start: place_col,
@@ -472,11 +500,7 @@ struct RenderedContent {
     visible_chars: usize,
 }
 
-fn render_content(
-    suggestions: &[String],
-    selected: usize,
-    engaged: bool,
-) -> RenderedContent {
+fn render_content(suggestions: &[String], selected: usize, engaged: bool) -> RenderedContent {
     // Format: [selected] other1 other2 ... <gap><hint>
     let hint: &str = if engaged {
         // Hint reflects the engaged-mode keybinding model:
@@ -536,7 +560,7 @@ pub fn paint_overlay<W: Write>(
     matcher: &EchoMatcher,
     screen: &ScreenState,
 ) -> usize {
-    if !crate::config::get().picker_enabled() {
+    if !crate::config::get().picker_enabled() && !crate::config::get().completion_enabled() {
         // Picker disabled — restore any leftover overlay (could happen
         // mid-session if the user edits the config; harmless if not).
         let bytes = build_restore(gate.region, matcher, screen);
@@ -619,7 +643,11 @@ pub fn check_hover(
     // Suppress hover only while the cursor is at end-of-buffer AND the
     // user is typing forward (no recent shrink). Backspace-edit at the
     // tail of the buffer opens the gate — see the doc comment above.
-    if typing_forward_at_end(matcher.buffer_cursor(), matcher.buffer_chars(), gate.buffer_shrank) {
+    if typing_forward_at_end(
+        matcher.buffer_cursor(),
+        matcher.buffer_chars(),
+        gate.buffer_shrank,
+    ) {
         if gate.hover_lint.take().is_some() {
             return true;
         }
@@ -769,7 +797,10 @@ mod tests {
         let c = render_content(&suggs, 0, false);
         let s = String::from_utf8(c.bytes.clone()).unwrap();
         assert!(s.contains("[the]"));
-        assert!(!s.contains("\x1b[7m"), "passive should not use reverse: {s:?}");
+        assert!(
+            !s.contains("\x1b[7m"),
+            "passive should not use reverse: {s:?}"
+        );
         assert!(s.contains("tab to pick"));
     }
 
@@ -785,12 +816,13 @@ mod tests {
         feed_history(&mut m, 5, 10, "teh ");
         let s = screen(120, 24, CursorPos { row: 5, col: 14 });
         let snap = PickerSnapshot {
+            char_start: 0,
+            char_end: 3,
             target: "teh".into(),
             suggestions: vec!["the".into(), "ten".into()],
             selected: 0,
         };
-        let (bytes, region) =
-            build_overlay(&RenderTarget::Engaged(&snap), &m, &s, None);
+        let (bytes, region) = build_overlay(&RenderTarget::Engaged(&snap), &m, &s, None);
         assert!(!bytes.is_empty());
         let region = region.expect("expected a region");
         // Word ends at col 13 (anchor 10 + char_end 3). Inline = 14.
@@ -817,6 +849,8 @@ mod tests {
         // (col 10..45) fits exactly.
         let s = screen(45, 24, CursorPos { row: 5, col: 14 });
         let snap = PickerSnapshot {
+            char_start: 0,
+            char_end: 3,
             target: "teh".into(),
             suggestions: vec!["the".into(), "ten".into()],
             selected: 0,
@@ -840,6 +874,8 @@ mod tests {
         feed_history(&mut m, 0, 0, "teh ");
         let s = screen(10, 24, CursorPos { row: 0, col: 3 });
         let snap = PickerSnapshot {
+            char_start: 0,
+            char_end: 3,
             target: "teh".into(),
             suggestions: vec!["the".into(), "ten".into(), "tech".into()],
             selected: 0,
@@ -871,12 +907,18 @@ mod tests {
         // must NOT engage the picker so shell completion still runs.
         // Typing forward at end-of-buffer → suppressed.
         assert!(typing_forward_at_end(7, 7, false), "cd jepa<Tab>: suppress");
-        assert!(typing_forward_at_end(9, 7, false), "cursor past end: suppress");
+        assert!(
+            typing_forward_at_end(9, 7, false),
+            "cursor past end: suppress"
+        );
         // Cursor moved back into a finished word → allowed.
         assert!(!typing_forward_at_end(2, 7, false), "cursor inside buffer");
         // At end-of-buffer but just shrank (backspaced into trailing word)
         // → allowed, matching the hover relaxation.
-        assert!(!typing_forward_at_end(7, 7, true), "shrink relaxes the gate");
+        assert!(
+            !typing_forward_at_end(7, 7, true),
+            "shrink relaxes the gate"
+        );
     }
 
     #[test]
@@ -944,7 +986,12 @@ mod tests {
         let t0 = Instant::now();
         gate.note_buffer(2, 4, t0);
         // Before idle window: no hover.
-        assert!(!check_hover(&mut gate, &m, t0, std::time::Duration::from_millis(250)));
+        assert!(!check_hover(
+            &mut gate,
+            &m,
+            t0,
+            std::time::Duration::from_millis(250)
+        ));
         assert!(gate.hover_lint.is_none());
         // After idle window: hover lights up.
         let later = t0 + std::time::Duration::from_millis(300);
