@@ -61,6 +61,19 @@ impl InputState {
         &self.buffer
     }
 
+    /// Drop inferred input and invalidate in-flight lint results before private input.
+    /// This is logical disposal, not a guarantee of secure memory erasure.
+    pub fn discard_input(&mut self) {
+        self.buffer = InputBuffer::new();
+        self.issues.clear();
+        self.last_checked_version = 0;
+        match &self.lints {
+            Lints::Worker(handle) => handle.boundary(),
+            #[cfg(test)]
+            Lints::Inline(_) => {}
+        }
+    }
+
     /// Toggle the chunk-level paste flag on the underlying buffer. Set
     /// by the stdin pump (`pty::pump_stdin_to_pty`) before iterating
     /// the bytes of a paste-shaped read chunk and cleared after, so

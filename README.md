@@ -17,6 +17,24 @@ Code, Codex, Aider, and any other terminal app.
 
 </div>
 
+## Privacy and security
+
+Spelling runs locally; Tuipo has no runtime telemetry, analytics or network client.
+The selected application (including Codex) keeps its own network and logging behavior.
+Opt-in `TUIPO_DEBUG_LOG` records only technical metadata, never prompt/terminal text,
+words, suggestions or tokens. Existing content logs from older builds are not erased.
+
+Canonical password input with echo disabled bypasses buffering, linting and key
+capture. Raw-mode TUI password fields cannot be reliably detected. For sensitive
+sessions, bypass all Tuipo processing:
+
+```sh
+TUIPO_PRIVATE=1 ./target/release/tuipo -- codex
+```
+
+This runs Codex directly; it does not change Codex's own privacy settings.
+Read [SECURITY.md](SECURITY.md) for the threat model, dependency findings and limits.
+
 ## Russian + English fork
 
 This local fork keeps the CLI name `tuipo`. Both `ru_RU` and `en_US` are enabled
@@ -147,27 +165,10 @@ cargo build --release
 
 ## Getting started
 
-### Turn it on everywhere (recommended)
+### Run only the selected application
 
-Install a shell hook once, and every new terminal session is wrapped automatically —
-you never have to think about it again:
-
-```bash
-tuipo init            # adds the hook to ~/.zshrc or ~/.bashrc
-tuipo init --dry-run  # just print the line it would add, don't write anything
-```
-
-Open a new terminal and you're covered everywhere. (The hook guards against
-re-entry, so it won't wrap itself.)
-
-Need a break from it? `tuipo off` switches it off everywhere — open tabs stop
-underlining within a second and new tabs start without it — and `tuipo on` brings it
-back. No need to touch your shell config.
-
-### Or just for one app
-
-If you'd rather not have it always-on and only want it inside a specific app — say,
-just Claude Code — skip the hook and wrap that command directly:
+This fork disables shell-hook installation, services and autostart. Launch only
+the application you want to wrap:
 
 ```bash
 tuipo -- claude

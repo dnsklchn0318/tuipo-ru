@@ -38,7 +38,6 @@
 //! this thread (`TUIPO_ENGINE=inprocess` forces that): the old memory
 //! profile, but still off the stdin path.
 
-use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -46,7 +45,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::debug::DebugLog;
+use crate::debug::{DebugLog, EngineMetadata};
 use crate::dict::CustomDict;
 use crate::engine::{EngineEvent, EngineProcess};
 use crate::event::{InputEvent, RenderEvent};
@@ -418,7 +417,7 @@ impl Worker {
             last_activity: Instant::now(),
         };
         if config.mode == EngineMode::InProcess {
-            worker.log(format_args!("in-process mode (TUIPO_ENGINE=inprocess)"));
+            worker.log(EngineMetadata::InProcess);
         }
         worker
     }
@@ -656,11 +655,10 @@ impl Worker {
                     since,
                 } = std::mem::replace(&mut self.engine, Engine::Stopped)
                 {
-                    self.log(format_args!(
-                        "ready pid={} in {}ms",
-                        proc.pid(),
-                        since.elapsed().as_millis()
-                    ));
+                    self.log(EngineMetadata::Ready {
+                        pid: proc.pid(),
+                        elapsed_ms: since.elapsed().as_millis(),
+                    });
                     self.engine = Engine::Ready {
                         proc,
                         generation,
@@ -669,9 +667,9 @@ impl Worker {
                 }
             }
             EngineEvent::Reply { id, issues } => self.on_reply(id, issues),
-            EngineEvent::Incompatible(reason) => {
+            EngineEvent::Incompatible => {
                 self.kill_engine();
-                self.fall_back(&format!("incompatible engine: {reason}"));
+                self.fall_back("incompatible engine");
             }
             EngineEvent::Exited => self.engine_failed("exited unexpectedly"),
         }
@@ -724,7 +722,7 @@ impl Worker {
         }
         self.shared.published.notify_all();
         if self.debug.enabled() {
-            self.debug.log_lints(&text, &issues);
+            self.debug.log_lints(issues.len());
         }
         self.published = Some(Published {
             epoch,
@@ -747,7 +745,7 @@ impl Worker {
         };
         match EngineProcess::spawn(on_event) {
             Ok(proc) => {
-                self.log(format_args!("spawn pid={}", proc.pid()));
+                self.log(EngineMetadata::Spawn { pid: proc.pid() });
                 self.served = 0;
                 self.engine = Engine::Starting {
                     proc,
@@ -755,19 +753,19 @@ impl Worker {
                     since: Instant::now(),
                 };
             }
-            Err(err) => self.fall_back(&format!("spawn failed: {err}")),
+            Err(_) => self.fall_back("spawn failed"),
         }
     }
 
     /// Planned stop: let the engine exit on EOF.
-    fn stop_engine(&mut self, reason: &str) {
+    fn stop_engine(&mut self, reason: &'static str) {
         match std::mem::replace(&mut self.engine, Engine::Stopped) {
             Engine::Starting { proc, .. } | Engine::Ready { proc, .. } => {
-                self.log(format_args!(
-                    "stop reason={reason} pid={} served={}",
-                    proc.pid(),
-                    self.served
-                ));
+                self.log(EngineMetadata::Stop {
+                    reason,
+                    pid: proc.pid(),
+                    served: self.served,
+                });
                 proc.shutdown();
             }
             other => self.engine = other,
@@ -786,7 +784,7 @@ impl Worker {
     /// The engine died, hung, or stopped accepting requests. Kill it,
     /// remember what it was working on, and either back off before the
     /// next spawn or give up on subprocesses for this session.
-    fn engine_failed(&mut self, what: &str) {
+    fn engine_failed(&mut self, what: &'static str) {
         let (pid, in_flight) = match &self.engine {
             Engine::Starting { proc, .. } => (proc.pid(), None),
             Engine::Ready {
@@ -801,10 +799,11 @@ impl Worker {
             self.poisoned = Some(text);
         }
         self.failures += 1;
-        self.log(format_args!(
-            "{what} pid={pid} (failure {}/{MAX_CRASHES})",
-            self.failures
-        ));
+        self.log(EngineMetadata::Failure {
+            reason: what,
+            pid,
+            count: self.failures,
+        });
         if self.failures >= MAX_CRASHES {
             self.fall_back("engine keeps failing");
         } else {
@@ -813,14 +812,14 @@ impl Worker {
         }
     }
 
-    fn fall_back(&mut self, reason: &str) {
-        self.log(format_args!("falling back to in-process linting: {reason}"));
+    fn fall_back(&mut self, _reason: &'static str) {
+        self.log(EngineMetadata::Fallback);
         self.engine = Engine::InProcess(None);
     }
 
-    fn log(&self, args: fmt::Arguments<'_>) {
+    fn log(&self, event: EngineMetadata) {
         if self.debug.enabled() {
-            self.debug.log_engine(args);
+            self.debug.log_engine(event);
         }
     }
 }

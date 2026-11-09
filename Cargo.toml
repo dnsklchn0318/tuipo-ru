@@ -25,7 +25,8 @@ crossterm = "0.28"
 # tuipo` for anyone not on a recent toolchain. 2.0.0 is what the test suite
 # and the lint selection in src/spell.rs are tuned against; an upgrade
 # was evaluated in Oct 2026 (see CLAUDE.md backlog) and deferred.
-harper-core = "=2.0.0"
+harper-core = { version = "=2.0.0", default-features = false }
+nix = { version = "0.28", default-features = false, features = ["term"] }
 portable-pty = "0.9"
 serde = { version = "1", features = ["derive"] }
 signal-hook = "0.3"

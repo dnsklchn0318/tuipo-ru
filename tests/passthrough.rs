@@ -372,8 +372,8 @@ fn tab_replaces_most_recent_misspelling() {
         "no FIX debug-log entry observed\n--- log ---\n{log}",
     );
     assert!(
-        log.contains("\"teh\""),
-        "FIX log didn't reference the misspelling\n--- log ---\n{log}",
+        !log.contains("teh") && !log.contains("the"),
+        "debug log contains spelling content"
     );
 }
 
@@ -762,4 +762,122 @@ fn off_switch_pauses_and_resumes_running_sessions() {
         "not painting after on{}",
         ctx()
     );
+}
+
+#[test]
+fn debug_log_excludes_prompt_output_password_and_token_canaries() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let cfg = fresh_config_dir("privacy-log");
+    let log_path = cfg.join("metadata.log");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_tuipo"))
+        .args(["--", "cat"])
+        .env("XDG_CONFIG_HOME", &cfg)
+        .env("TUIPO_DEBUG_LOG", &log_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    let writer = std::thread::spawn(move || {
+        type_slowly(
+            &mut input,
+            "promptCanary_9287 tokenCanary_f30 passwordCanary_845 превет ",
+        );
+        std::thread::sleep(Duration::from_millis(500));
+        input.write_all(b"\n").unwrap();
+        input.flush().unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+    });
+    let output = child.wait_with_output().unwrap();
+    writer.join().unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("promptCanary_9287"));
+    let log = std::fs::read_to_string(&log_path).unwrap();
+    assert!(log.contains("INPUT") && log.contains("PRINTS"));
+    for needle in [
+        "promptCanary",
+        "tokenCanary",
+        "passwordCanary",
+        "превет",
+        "buf=",
+    ] {
+        assert!(!log.contains(needle), "sensitive content in debug log");
+    }
+    // No input-history artifacts; only the explicitly requested metadata file.
+    let entries: Vec<_> = std::fs::read_dir(&cfg)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(entries, [std::ffi::OsString::from("metadata.log")]);
+    std::fs::remove_dir_all(cfg).unwrap();
+}
+
+#[test]
+fn private_mode_bypasses_tuipo_processing_and_debug_logging() {
+    let cfg = fresh_config_dir("private-mode");
+    let log = cfg.join("must-not-exist.log");
+    let output = tuipo()
+        .env("TUIPO_PRIVATE", "1")
+        .env("TUIPO_DEBUG_LOG", &log)
+        .args(["--", "printf", "%s", "privateCanary_37"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"privateCanary_37");
+    assert!(!log.exists());
+    std::fs::remove_dir_all(cfg).unwrap();
+}
+
+#[test]
+fn init_does_not_install_hooks_or_touch_dotfiles() {
+    let home = fresh_config_dir("nohooks");
+    std::fs::write(home.join(".zshrc"), "# user configuration\n").unwrap();
+    tuipo()
+        .env("HOME", &home)
+        .env("SHELL", "/bin/zsh")
+        .arg("init")
+        .assert()
+        .failure();
+    assert_eq!(
+        std::fs::read_to_string(home.join(".zshrc")).unwrap(),
+        "# user configuration\n"
+    );
+    assert_eq!(std::fs::read_dir(&home).unwrap().count(), 1);
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn canonical_password_input_is_forwarded_without_buffering_or_linting() {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::process::{Command, Stdio};
+    let cfg = fresh_config_dir("canonical-secret");
+    let log_path = cfg.join("metadata.log");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_tuipo"))
+        .args(["--", "sh", "-c", "stty -echo; printf 'SECRET_READY\\n'; IFS= read -r secret; stty echo; printf 'SECRET_DONE\\n'"])
+        .env("XDG_CONFIG_HOME", &cfg).env("TUIPO_DEBUG_LOG", &log_path)
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    let mut ready = String::new();
+    reader.read_line(&mut ready).unwrap();
+    assert!(ready.contains("SECRET_READY"));
+    let mut input = child.stdin.take().unwrap();
+    type_slowly(&mut input, "hiddenPasswordCanary_9207");
+    input.write_all(&[14, 16, b'\n']).unwrap();
+    input.flush().unwrap();
+    drop(input);
+    let mut output = String::new();
+    reader.read_to_string(&mut output).unwrap();
+    assert!(child.wait().unwrap().success());
+    assert!(output.contains("SECRET_DONE"));
+    assert!(!output.contains("hiddenPassword"));
+    let log = std::fs::read_to_string(&log_path).unwrap();
+    assert!(
+        !log.contains("hiddenPassword")
+            && !log.contains("INPUT")
+            && !log.contains("LINTS")
+            && !log.contains("spawn pid=")
+    );
+    std::fs::remove_dir_all(cfg).unwrap();
 }

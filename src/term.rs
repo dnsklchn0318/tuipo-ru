@@ -31,20 +31,18 @@ impl Drop for RawModeGuard {
     }
 }
 
-/// Install a panic hook that disables raw mode before the panic message is
-/// printed. Otherwise the message renders without proper line breaks because
-/// the terminal is still in raw mode at the point Rust prints it.
+/// Restore raw mode and emit a fixed diagnostic on panic. Never print the
+/// payload or backtrace: either could contain terminal text or credentials.
 ///
 /// Panics on the lint worker thread are the exception: the worker contains
 /// them (a harper panic costs one lint result) and the session carries on,
 /// so the hook must neither drop raw mode nor print over the wrapped app.
 pub fn install_panic_hook() {
-    let original = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
+    std::panic::set_hook(Box::new(|_info| {
         if std::thread::current().name() == Some(crate::lint_worker::WORKER_THREAD_NAME) {
             return;
         }
         let _ = crossterm::terminal::disable_raw_mode();
-        original(info);
+        eprintln!("tuipo: internal error; terminal mode restored (panic details suppressed)");
     }));
 }

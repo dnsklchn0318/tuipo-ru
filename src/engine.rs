@@ -107,7 +107,7 @@ pub enum EngineEvent {
     Reply { id: u64, issues: Vec<SpellIssue> },
     /// The engine speaks a different protocol (the binary on disk changed
     /// under us, or isn't tuipo at all). Respawning won't help.
-    Incompatible(String),
+    Incompatible,
     /// The engine's stdout closed or carried garbage: it exited, crashed,
     /// or was killed.
     Exited,
@@ -125,7 +125,16 @@ impl EngineProcess {
     /// Start an engine. `on_event` runs on the reader thread for every
     /// event, ending with `Exited` or `Incompatible`.
     pub fn spawn(on_event: impl FnMut(EngineEvent) + Send + 'static) -> io::Result<Self> {
-        let mut child = Command::new(engine_executable()?)
+        let mut command = Command::new(engine_executable()?);
+        // The spell engine needs configuration paths, not API tokens or the
+        // wrapped application's full environment. No shell is involved.
+        command.env_clear();
+        for key in ["HOME", "XDG_CONFIG_HOME"] {
+            if let Some(value) = std::env::var_os(key) {
+                command.env(key, value);
+            }
+        }
+        let mut child = command
             .arg(ENGINE_SUBCOMMAND)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -240,8 +249,8 @@ fn read_events(stdout: ChildStdout, mut on_event: impl FnMut(EngineEvent)) {
             return;
         }
     };
-    if let Err(reason) = hello {
-        on_event(EngineEvent::Incompatible(reason));
+    if hello.is_err() {
+        on_event(EngineEvent::Incompatible);
         return;
     }
     on_event(EngineEvent::Ready);

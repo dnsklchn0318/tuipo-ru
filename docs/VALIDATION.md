@@ -47,3 +47,22 @@ and Backspace semantics; complex graphemes/wide characters in input conservative
 disable overlays and correction; corrections on earlier pasted lines are refused;
 menus require an unoccupied, unambiguous position and may pass keys through in
 crowded/narrow screens. See the implementation document for details.
+
+## Security hardening follow-up
+
+The later security changes are documented in [SECURITY.md](../SECURITY.md).
+After removing content logging, adding canonical no-echo/private-mode handling and
+updating compatible dependencies, validation passed again on macOS 27.2 ARM64:
+
+- `cargo fmt --check`
+- `cargo test --locked`: 312 unit + 23 integration tests passed; one original
+  diagnostic test ignored. Includes real no-echo password-input and logging canaries.
+- `cargo clippy --locked --all-targets -- -D warnings`
+- `cargo build --locked --release`
+- `python3 scripts/check-local-policy.py`: passed for 275 active normal/build
+  packages across all targets.
+
+RustSec cargo-audit is **not passing**: eight zip vulnerability records and three
+warnings remain in the final lockfile. See the security document and committed
+JSON report for exact versions, upstream constraints and database revision.
+This follow-up does not add native GUI/Codex verification to the earlier results.

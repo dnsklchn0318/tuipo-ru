@@ -38,8 +38,9 @@ fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     // The spell engine child (spawned by the lint worker) speaks a binary
     // protocol on stdin/stdout and never touches the terminal, so it skips
-    // the raw-mode panic hook. It loads the same spelling configuration.
+    // raw mode. It uses a content-free panic hook and the same config.
     if argv.first().map(String::as_str) == Some(engine::ENGINE_SUBCOMMAND) {
+        term::install_panic_hook();
         config::load_global();
         std::process::exit(engine::run_server());
     }
@@ -68,7 +69,7 @@ fn main() {
         std::process::exit(0);
     }
     let args = Args::parse();
-    if config::switched_off() {
+    if std::env::var_os("TUIPO_PRIVATE").is_some() || config::switched_off() {
         run_unwrapped(&args.command);
     }
     // Load the persistent config once, before any thread starts. Env vars
@@ -105,7 +106,7 @@ fn print_help() {
     println!("tuipo — Grammarly-style spell-check overlay for any TUI\n");
     println!("USAGE:");
     println!("  tuipo -- <command> [args...]    Wrap a command under tuipo");
-    println!("  tuipo init [--dry-run]          Install shell hook for auto-wrap");
+    println!("  tuipo init                      Disabled: use explicit per-app launch");
     println!("  tuipo off                       Switch tuipo off: open tabs stop underlining,");
     println!("                                   new tabs start without it");
     println!("  tuipo on                        Switch it back on");
@@ -122,9 +123,10 @@ fn print_help() {
     println!("  ~/.config/tuipo/dict.txt        Per-user custom dictionary (one word/line).");
     println!();
     println!("ENV VARS (always override the config):");
+    println!("  TUIPO_PRIVATE=1                Run selected app directly; no input processing");
     println!("  TUIPO_ACTIVE                    Set by tuipo on the wrapped child");
-    println!("  TUIPO_DEBUG_LOG=<path>          Append-mode debug log file");
-    println!("  TUIPO_PAINT_OFF=1               Disable all painting (passthrough only)");
+    println!("  TUIPO_DEBUG_LOG=<path>          Metadata-only private debug log");
+    println!("  TUIPO_PAINT_OFF=1               Disable overlay; input is still processed");
     println!("  TUIPO_STATUS=on                 Show always-on issue count status row");
     println!("  TUIPO_TAB_FIX=1                 Opt in to Tab=apply-top-suggestion");
     println!("  TUIPO_GRAMMAR=1                 Opt in to narrow grammar lints");

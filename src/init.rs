@@ -1,97 +1,24 @@
-//! `tuipo init` — writes a shell hook so every new terminal session
-//! automatically wraps itself in tuipo.
-//!
-//! The hook respects the `TUIPO_ACTIVE` env var as a re-entrance guard,
-//! and uses `exec` so the wrapper replaces the shell process rather than
-//! adding a parent. After install, every new terminal calls
-//! `exec tuipo -- $SHELL` once during shell init, then the user is
-//! inside a tuipo-wrapped shell for the rest of the session.
-//!
-//! `tuipo off` / `tuipo on` flip the off switch (`config::off_switch_path`)
-//! instead of touching the hook: while it's off, `tuipo -- $SHELL` simply
-//! runs the shell (see `main`), so any installed hook — old ones included —
-//! starts plain shells, and running sessions pause themselves.
+//! Explicit on/off state only. Shell integration is disabled in this fork.
+//! Historical hook helpers are retained only in upstream regression tests.
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 
+#[cfg(test)]
 const MARKER: &str = "# tuipo — Grammarly-style spell-check for terminal TUIs";
 
+#[cfg(test)]
 #[derive(Debug, PartialEq, Eq)]
 struct ShellHook {
     rc_path: PathBuf,
     hook_line: String,
 }
 
-pub fn run_init(args: &[String]) -> i32 {
-    let dry_run = args.iter().any(|a| a == "--dry-run");
-    let force = args.iter().any(|a| a == "--force");
-
-    let shell = std::env::var("SHELL").unwrap_or_default();
-    let home = match std::env::var_os("HOME") {
-        Some(h) => PathBuf::from(h),
-        None => {
-            eprintln!("tuipo init: $HOME is not set");
-            return 1;
-        }
-    };
-
-    let exe_path = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("tuipo init: couldn't determine my own path: {e}");
-            return 1;
-        }
-    };
-
-    let Some(hook) = detect_shell(&shell, &home, &exe_path) else {
-        eprintln!(
-            "tuipo init: couldn't determine your shell from $SHELL={shell:?}\n\
-             Supported: zsh, bash. Add the equivalent line to your shell's rc file manually."
-        );
-        return 1;
-    };
-
-    if dry_run {
-        println!("Would add to {}:", hook.rc_path.display());
-        println!("  {MARKER}");
-        println!("  {}", hook.hook_line);
-        return 0;
-    }
-
-    let existing = std::fs::read_to_string(&hook.rc_path).unwrap_or_default();
-    if existing.contains(&hook.hook_line) && !force {
-        println!(
-            "tuipo init: already installed in {}.\n\
-             Open a new terminal to activate, or pass --force to reinstall.",
-            hook.rc_path.display(),
-        );
-        return 0;
-    }
-
-    // Strip any previous tuipo hook lines before re-installing — handles
-    // upgrades cleanly without accumulating dead lines (e.g. old PATH-based
-    // hook lingering after we switched to absolute-path).
-    let cleaned = strip_old_hook(&existing);
-    let needs_separator = !cleaned.is_empty() && !cleaned.ends_with('\n');
-    let new_content = format!(
-        "{cleaned}{sep}{MARKER}\n{}\n",
-        hook.hook_line,
-        sep = if needs_separator { "\n\n" } else { "\n" },
-    );
-    if let Err(e) = std::fs::write(&hook.rc_path, new_content) {
-        eprintln!(
-            "tuipo init: failed to write {}: {e}",
-            hook.rc_path.display()
-        );
-        return 1;
-    }
-    println!(
-        "tuipo init: installed in {}.\n\
-         Open a new terminal (or run `exec $SHELL`) to activate.",
-        hook.rc_path.display(),
-    );
-    0
+pub fn run_init(_args: &[String]) -> i32 {
+    eprintln!("tuipo: shell integration is disabled; run tuipo -- <application> explicitly");
+    1
 }
 
 /// `tuipo off`: switch tuipo off until `tuipo on`.
@@ -171,6 +98,7 @@ fn switch_on(path: &Path) -> io::Result<bool> {
 /// Remove any prior tuipo hook lines and their MARKER comments from rc
 /// content. Recognises both the current absolute-path hook and the older
 /// `command -v tuipo` style.
+#[cfg(test)]
 fn strip_old_hook(content: &str) -> String {
     let mut out_lines: Vec<&str> = Vec::with_capacity(content.lines().count());
     let mut skip_next_if_marker = false;
@@ -205,6 +133,7 @@ fn strip_old_hook(content: &str) -> String {
     out_lines.join("\n")
 }
 
+#[cfg(test)]
 fn detect_shell(
     shell_env: &str,
     home: &std::path::Path,
@@ -236,6 +165,7 @@ fn detect_shell(
 
 /// Embed the absolute path to *this* tuipo binary in the hook line.
 /// Avoids depending on `tuipo` being in `$PATH` after install.
+#[cfg(test)]
 fn zsh_bash_hook(exe_path: &std::path::Path) -> String {
     let p = exe_path.display();
     format!(r#"[[ -z "$TUIPO_ACTIVE" ]] && [[ -x "{p}" ]] && exec "{p}" -- "$SHELL""#)

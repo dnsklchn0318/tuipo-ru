@@ -119,7 +119,13 @@ pub fn run(command: Vec<String>) -> Result<i32> {
 
     spawn_winch_thread(Arc::clone(&master), event_tx.clone());
     let eligibility = Arc::new(Mutex::new(None));
-    spawn_stdin_pump(writer, event_tx.clone(), lints, eligibility.clone());
+    spawn_stdin_pump(
+        writer,
+        event_tx.clone(),
+        lints,
+        eligibility.clone(),
+        master.clone(),
+    );
     spawn_pty_reader(reader, event_tx.clone());
     spawn_tick(event_tx.clone());
     drop(event_tx); // render loop holds the last receiver only
@@ -181,8 +187,9 @@ fn spawn_stdin_pump(
     event_tx: mpsc::Sender<RenderEvent>,
     lints: LintHandle,
     eligibility: Eligibility,
+    master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
 ) {
-    thread::spawn(move || pump_stdin_to_pty(writer, event_tx, lints, eligibility));
+    thread::spawn(move || pump_stdin_to_pty(writer, event_tx, lints, eligibility, master));
 }
 
 /// Minimal escape-sequence parser used by the stdin pump while the
@@ -246,6 +253,7 @@ fn pump_stdin_to_pty(
     event_tx: mpsc::Sender<RenderEvent>,
     lints: LintHandle,
     eligibility: Eligibility,
+    master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
 ) {
     let mut state = InputState::new(lints);
     let debug = DebugLog::from_env();
@@ -254,10 +262,36 @@ fn pump_stdin_to_pty(
     let mut handle = stdin.lock();
     let mut picker = PickerCtx::new();
     picker.eligibility = eligibility;
+    let mut suspended = false;
     loop {
         match handle.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {
+                // Canonical no-echo is the standard password mode. Raw TUI
+                // password widgets are indistinguishable from ordinary TUI input.
+                let private = master
+                    .lock()
+                    .ok()
+                    .and_then(|m| m.get_termios())
+                    .map(|t| private_terminal_mode(t.local_flags))
+                    .unwrap_or(true);
+                if private || suspended {
+                    state.discard_input();
+                    picker_dismiss(&mut picker, &event_tx);
+                    *picker.eligibility.lock().unwrap() = None;
+                }
+                suspended = private;
+                if private {
+                    if writer
+                        .write_all(&buf[..n])
+                        .and_then(|()| writer.flush())
+                        .is_err()
+                    {
+                        break;
+                    }
+                    buf[..n].fill(0);
+                    continue;
+                }
                 let chunk = &buf[..n];
                 // Paste burst: forward the whole chunk to the child at
                 // once and run harper exactly once afterward, rather than
@@ -308,6 +342,11 @@ fn pump_stdin_to_pty(
     }
 }
 
+fn private_terminal_mode(flags: nix::sys::termios::LocalFlags) -> bool {
+    use nix::sys::termios::LocalFlags;
+    flags.contains(LocalFlags::ICANON) && !flags.contains(LocalFlags::ECHO)
+}
+
 /// Handle a read chunk classified as a paste burst (see
 /// [`chunk_looks_like_paste`]). Reconstructs the input buffer without
 /// spell-checking each intermediate prefix, forwards the whole chunk to
@@ -352,7 +391,7 @@ fn handle_paste_chunk(
     // buffer length.
     picker.note_buffer(state.buffer().text().chars().count());
     if debug.enabled() {
-        debug.log_input(state);
+        debug.log_input();
     }
     true
 }
@@ -744,7 +783,7 @@ fn handle_byte(
             // a word (Tab → engage the picker).
             picker.note_buffer(state.buffer().text().chars().count());
             if debug.enabled() {
-                debug.log_input(state);
+                debug.log_input();
             }
         }
         FeedOutcome::Boundary => {
@@ -778,7 +817,7 @@ fn apply_fix(
     fix: &Fix,
 ) -> std::io::Result<()> {
     if debug.enabled() {
-        debug.log_fix(&fix.issue_word, &fix.replacement_text);
+        debug.log_fix();
     }
     // Position the cursor at `char_end` of the misspelling. Each arrow
     // CSI is forwarded to the PTY (so the child moves its cursor) and
@@ -896,15 +935,12 @@ fn render_loop(
                 screen_events.clear();
                 observer.observe_with_events(&bytes, &mut screen_events);
                 if debug.enabled() && !screen_events.is_empty() {
-                    let chars: String = screen_events
+                    let count = screen_events
                         .iter()
-                        .filter_map(|e| match e {
-                            ScreenEvent::Print(p) => Some(p.ch),
-                            ScreenEvent::Erase(_) => None,
-                        })
-                        .collect();
-                    if !chars.is_empty() {
-                        debug.log_prints(&chars);
+                        .filter(|ev| matches!(ev, ScreenEvent::Print(_)))
+                        .count();
+                    if count > 0 {
+                        debug.log_prints(count);
                     }
                 }
                 for ev in &screen_events {
@@ -1361,5 +1397,30 @@ mod completion_tests {
         );
         assert!(picker.engaged.is_none());
         assert_eq!(*capture.0.lock().unwrap(), [14, 16]);
+    }
+}
+
+#[cfg(test)]
+mod secret_mode_tests {
+    use super::*;
+    use nix::sys::termios::LocalFlags;
+    #[test]
+    fn canonical_no_echo_is_private_but_raw_tui_is_ambiguous() {
+        assert!(private_terminal_mode(LocalFlags::ICANON));
+        assert!(!private_terminal_mode(
+            LocalFlags::ICANON | LocalFlags::ECHO
+        ));
+        assert!(!private_terminal_mode(LocalFlags::empty()));
+    }
+    #[test]
+    fn discarding_input_invalidates_old_issues_and_partial_utf8() {
+        let mut state = InputState::with_checker();
+        state.feed_bytes(b"teh");
+        assert!(!state.issues().is_empty());
+        state.feed_bytes(&[0xd0]);
+        state.discard_input();
+        assert!(state.buffer().is_empty() && state.issues().is_empty());
+        state.feed_bytes(b"hello");
+        assert_eq!(state.buffer().text(), "hello");
     }
 }
