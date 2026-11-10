@@ -1,6 +1,6 @@
 # tuipo-ru
 
-Version 0.4.0. Local Russian and English spelling checks **while you type in
+Version 0.4.1. Local Russian and English spelling checks **while you type in
 Codex CLI in Terminal.app**, with underlined mistakes and keyboard corrections.
 
 ## Start Codex with checking
@@ -59,7 +59,7 @@ languages = ["ru_RU", "en_US"]
 interactive = true
 next_key = "ctrl+n"
 previous_key = "ctrl+p"
-underline = "auto"
+underline = "highlight" # muted burgundy background; or auto/plain/fancy
 pause_ms = 150
 grammar = false
 # dict_path = "/absolute/path/exceptions.txt"
@@ -67,7 +67,9 @@ grammar = false
 
 Exceptions: one word per line, case-insensitive, `#` comments. The default exception
 file is `dict.txt` beside config.toml. Custom Russian aff/dic paths must be supplied
-together. The original terminal settings and config TUI remain supported.
+together. Use `underline = "highlight"` for light text on a muted burgundy background.
+`auto` retains the original terminal-dependent underline. The config TUI supports
+all four styles. The original terminal settings remain supported.
 
 `tuipo check -- draft.txt` is an optional file-only command, not the primary workflow.
 It reads a regular UTF-8 file of at most 1 MiB without modifying it; exit codes are

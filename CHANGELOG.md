@@ -1,5 +1,11 @@
 # Changes
 
+## 0.4.1 — readable error highlighting
+
+- Add optional `underline = "highlight"`: light text on a muted burgundy background.
+- Clear the background as well as the underline when the word is corrected.
+- Preserve existing auto/plain/fancy styles and expose highlight in the config TUI.
+
 ## 0.4.0 — Terminal.app and Codex CLI
 
 - Restore automatic RU/EN checking while typing in `tuipo -- codex`.

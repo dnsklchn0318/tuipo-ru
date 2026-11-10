@@ -58,6 +58,8 @@ pub enum UnderlineMode {
     /// Always curly red `\x1b[4:3m\x1b[58:2::255:0:0m`. Useful in tmux
     /// which strips `TERM_PROGRAM` and would otherwise default to PLAIN.
     Fancy,
+    /// Quiet high-contrast word highlight, including Terminal.app.
+    Highlight,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -253,6 +255,7 @@ impl Config {
         match self.underline {
             UnderlineMode::Plain => paint::PLAIN,
             UnderlineMode::Fancy => paint::FANCY,
+            UnderlineMode::Highlight => paint::HIGHLIGHT,
             UnderlineMode::Auto => match std::env::var("TERM_PROGRAM").as_deref() {
                 Ok("Apple_Terminal") => paint::PLAIN,
                 _ => paint::FANCY,
@@ -417,12 +420,23 @@ fn underline_mode_str(m: UnderlineMode) -> &'static str {
         UnderlineMode::Auto => "auto",
         UnderlineMode::Plain => "plain",
         UnderlineMode::Fancy => "fancy",
+        UnderlineMode::Highlight => "highlight",
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn highlight_setting_round_trips() {
+        let cfg = Config {
+            underline: UnderlineMode::Highlight,
+            ..Config::default()
+        };
+        let parsed: Config = toml::from_str(&cfg.to_toml_string()).unwrap();
+        assert_eq!(parsed.underline, UnderlineMode::Highlight);
+    }
 
     #[test]
     fn defaults_are_minimal() {

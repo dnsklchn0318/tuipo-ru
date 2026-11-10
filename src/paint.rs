@@ -220,6 +220,14 @@ pub(crate) const FANCY: UnderlineStyle = UnderlineStyle {
     close: b"\x1b[59m\x1b[24m",
 };
 
+/// Muted burgundy background (#5f0000) with light gray text (#eeeeee).
+/// Standard semicolon-form 256-color SGR works in Terminal.app. Keep the
+/// underline as a second cue; reset colors before leaving the word.
+pub(crate) const HIGHLIGHT: UnderlineStyle = UnderlineStyle {
+    open: b"\x1b[48;5;52m\x1b[38;5;255m\x1b[4m",
+    close: b"\x1b[39;49m\x1b[24m",
+};
+
 /// Pick the underline style by delegating to [`crate::config::Config`]'s
 /// resolution. Env overrides win there, then the config's
 /// `underline = "auto" | "plain" | "fancy"`, then `TERM_PROGRAM`
@@ -351,10 +359,9 @@ fn build_annotations_inner(
             }
             if !chars.is_empty() {
                 emit_relative_move(&mut out, pen, (span.row, run_start));
-                // Use PLAIN.close (`\x1b[24m`) — sufficient to turn off
-                // any flavor of underline (plain, curly, etc.) and
-                // doesn't touch other attrs.
-                out.extend_from_slice(PLAIN.close);
+                // Clear every attribute introduced by the active style,
+                // including the background of highlighted words.
+                out.extend_from_slice(style.close);
                 out.extend_from_slice(chars.as_bytes());
                 pen = (span.row, run_start + chars.chars().count() as u16);
                 wrote_anything = true;
@@ -1145,83 +1152,89 @@ mod tests {
 
     #[test]
     fn paint_clears_stale_span_when_lint_disappears() {
-        // The user's scenario: type "reacon ", paint underlines "reacon"
-        // at cols 0..6; then fix in place (backspace "con", type "son")
-        // so buffer becomes "reason". The host only rewrites cols 3..6
-        // — cols 0..2 keep our stale underline attribute until we
-        // actively repaint those cells without it. This test verifies
-        // that the second paint emits `\x1b[24m` + the current grid chars
-        // at the original span, clearing the leftover underline.
-        let mut m = EchoMatcher::new();
-        m.apply_input(InputEvent::Lints {
-            issues: vec![issue(0, 6, "reacon")],
-            buffer_chars: 7,
-            buffer_text: "reacon ".into(),
-            buffer_cursor: 0,
-        });
-        feed_history(&mut m, 0, 0, "reacon ");
-        let mut g = PaintGate::new();
+        for style in [PLAIN, HIGHLIGHT] {
+            // The user's scenario: type "reacon ", paint underlines "reacon"
+            // at cols 0..6; then fix in place (backspace "con", type "son")
+            // so buffer becomes "reason". The host only rewrites cols 3..6
+            // — cols 0..2 keep our stale underline attribute until we
+            // actively repaint those cells without it. This test verifies
+            // that the second paint emits `\x1b[24m` + the current grid chars
+            // at the original span, clearing the leftover underline.
+            let mut m = EchoMatcher::new();
+            m.apply_input(InputEvent::Lints {
+                issues: vec![issue(0, 6, "reacon")],
+                buffer_chars: 7,
+                buffer_text: "reacon ".into(),
+                buffer_cursor: 0,
+            });
+            feed_history(&mut m, 0, 0, "reacon ");
+            let mut g = PaintGate::new();
 
-        // First paint: underline "reacon".
-        let out1 = build_annotations_with(
-            &mut g,
-            &m,
-            &screen_with_cursor(80, 24, 0, 7),
-            true,
-            PLAIN,
-            false,
-        );
-        assert!(
-            String::from_utf8_lossy(&out1).contains("\x1b[4mreacon\x1b[24m"),
-            "first paint should underline reacon: {out1:?}"
-        );
-        assert_eq!(g.painted_len(), 1, "should track the painted span");
+            // First paint: underline "reacon".
+            let out1 = build_annotations_with(
+                &mut g,
+                &m,
+                &screen_with_cursor(80, 24, 0, 7),
+                true,
+                style,
+                false,
+            );
+            assert!(
+                String::from_utf8_lossy(&out1).contains(&format!(
+                    "{}reacon{}",
+                    String::from_utf8_lossy(style.open),
+                    String::from_utf8_lossy(style.close)
+                )),
+                "first paint should underline reacon: {out1:?}"
+            );
+            assert_eq!(g.painted_len(), 1, "should track the painted span");
 
-        // User fixes in place: grid cells at cols 3..6 are now 's','o','n'.
-        // Buffer becomes "reason ". Lints empty (correct word).
-        m.apply_input(InputEvent::Lints {
-            issues: vec![],
-            buffer_chars: 7,
-            buffer_text: "reason ".into(),
-            buffer_cursor: 0,
-        });
-        // Overwrite the changed cells in the grid (Claude's echo of the
-        // retyped chars). The "rea" cells at 0..2 keep their old chars,
-        // which still have our underline attribute on screen.
-        m.apply_print(&PrintEvent {
-            ch: 's',
-            at: CursorPos { row: 0, col: 3 },
-        });
-        m.apply_print(&PrintEvent {
-            ch: 'o',
-            at: CursorPos { row: 0, col: 4 },
-        });
-        m.apply_print(&PrintEvent {
-            ch: 'n',
-            at: CursorPos { row: 0, col: 5 },
-        });
+            // User fixes in place: grid cells at cols 3..6 are now 's','o','n'.
+            // Buffer becomes "reason ". Lints empty (correct word).
+            m.apply_input(InputEvent::Lints {
+                issues: vec![],
+                buffer_chars: 7,
+                buffer_text: "reason ".into(),
+                buffer_cursor: 0,
+            });
+            // Overwrite the changed cells in the grid (Claude's echo of the
+            // retyped chars). The "rea" cells at 0..2 keep their old chars,
+            // which still have our underline attribute on screen.
+            m.apply_print(&PrintEvent {
+                ch: 's',
+                at: CursorPos { row: 0, col: 3 },
+            });
+            m.apply_print(&PrintEvent {
+                ch: 'o',
+                at: CursorPos { row: 0, col: 4 },
+            });
+            m.apply_print(&PrintEvent {
+                ch: 'n',
+                at: CursorPos { row: 0, col: 5 },
+            });
 
-        let out2 = build_annotations_with(
-            &mut g,
-            &m,
-            &screen_with_cursor(80, 24, 0, 7),
-            true,
-            PLAIN,
-            false,
-        );
-        let st = String::from_utf8_lossy(&out2);
-        // We should emit `\x1b[24m` (underline off) followed by the
-        // current grid chars at cols 0..6 — "reason" — so the cells get
-        // rewritten without the underline attribute.
-        assert!(
-            st.contains("\x1b[24mreason"),
-            "expected clear pass to rewrite cells with underline off: {st:?}"
-        );
-        assert!(
-            !st.contains("\x1b[4mreason"),
-            "should not re-underline the fixed word: {st:?}"
-        );
-        assert_eq!(g.painted_len(), 0, "tracking should be empty after clear");
+            let out2 = build_annotations_with(
+                &mut g,
+                &m,
+                &screen_with_cursor(80, 24, 0, 7),
+                true,
+                style,
+                false,
+            );
+            let st = String::from_utf8_lossy(&out2);
+            // We should emit `\x1b[24m` (underline off) followed by the
+            // current grid chars at cols 0..6 — "reason" — so the cells get
+            // rewritten without the underline attribute.
+            assert!(
+                st.contains(&format!("{}reason", String::from_utf8_lossy(style.close))),
+                "expected clear pass to rewrite cells with underline off: {st:?}"
+            );
+            assert!(
+                !st.contains("\x1b[4mreason"),
+                "should not re-underline the fixed word: {st:?}"
+            );
+            assert_eq!(g.painted_len(), 0, "tracking should be empty after clear");
+        }
     }
 
     #[test]

@@ -205,7 +205,7 @@ impl Field {
     fn description(self) -> &'static str {
         match self {
             Field::Paint => "underline overlay master switch",
-            Field::Underline => "style: auto · plain · fancy",
+            Field::Underline => "style: auto · plain · fancy · highlight",
             Field::TabFix => "tab triggers spell-fix",
             Field::Picker => "hover + tab suggestion picker",
             Field::StatusRow => "idle bottom-row issue count",
@@ -395,6 +395,7 @@ fn cycle_underline(mode: UnderlineMode, direction: i32) -> UnderlineMode {
         UnderlineMode::Auto,
         UnderlineMode::Plain,
         UnderlineMode::Fancy,
+        UnderlineMode::Highlight,
     ];
     let i = order.iter().position(|m| *m == mode).unwrap_or(0) as i32;
     let n = order.len() as i32;
@@ -704,6 +705,7 @@ fn render_value(state: &TuiState, field: Field) -> String {
             UnderlineMode::Auto => "auto".into(),
             UnderlineMode::Plain => "plain".into(),
             UnderlineMode::Fancy => "fancy".into(),
+            UnderlineMode::Highlight => "highlight".into(),
         },
         Field::TabFix => bool_label(state.cfg.tab_fix),
         Field::Picker => bool_label(state.cfg.picker),
@@ -750,7 +752,7 @@ mod tests {
     }
 
     #[test]
-    fn cycle_underline_visits_all_three() {
+    fn cycle_underline_visits_all_four() {
         assert_eq!(
             cycle_underline(UnderlineMode::Auto, 1),
             UnderlineMode::Plain
@@ -761,12 +763,16 @@ mod tests {
         );
         assert_eq!(
             cycle_underline(UnderlineMode::Fancy, 1),
+            UnderlineMode::Highlight
+        );
+        assert_eq!(
+            cycle_underline(UnderlineMode::Highlight, 1),
             UnderlineMode::Auto
         );
         // Reverse direction.
         assert_eq!(
             cycle_underline(UnderlineMode::Auto, -1),
-            UnderlineMode::Fancy
+            UnderlineMode::Highlight
         );
     }
 
