@@ -295,6 +295,7 @@ fn build_annotations_inner(
     style: UnderlineStyle,
     grammar_enabled: bool,
 ) -> Vec<u8> {
+    let colored = style.open == HIGHLIGHT.open;
     let new_spans = compute_new_spans(matcher, screen, grammar_enabled);
 
     // Diff against the previously-painted set: anything in `gate.painted`
@@ -362,7 +363,20 @@ fn build_annotations_inner(
                 // Clear every attribute introduced by the active style,
                 // including the background of highlighted words.
                 out.extend_from_slice(style.close);
-                out.extend_from_slice(chars.as_bytes());
+                if colored {
+                    let mut colors = crate::screen::Colors::default();
+                    for (offset, ch) in chars.chars().enumerate() {
+                        let original = screen.colors_at(span.row, run_start + offset as u16);
+                        if original != colors {
+                            original.write_restore(&mut out);
+                            colors = original;
+                        }
+                        let mut bytes = [0; 4];
+                        out.extend_from_slice(ch.encode_utf8(&mut bytes).as_bytes());
+                    }
+                } else {
+                    out.extend_from_slice(chars.as_bytes());
+                }
                 pen = (span.row, run_start + chars.chars().count() as u16);
                 wrote_anything = true;
             }
@@ -386,6 +400,9 @@ fn build_annotations_inner(
         out.extend_from_slice(style.open);
         out.extend_from_slice(span.word.as_bytes());
         out.extend_from_slice(style.close);
+        if colored {
+            screen.colors.write_restore(&mut out);
+        }
         pen = (span.row, span.col_end);
         next_painted.push(PaintedSpan {
             row: span.row,
@@ -412,6 +429,9 @@ fn build_annotations_inner(
     // from the pen's last position. This avoids both CUP (which would use
     // wrong absolute coords when local-terminal scrollback offsets PTY)
     // and ESC 7/8 (which share a saved-cursor slot with the child).
+    if colored {
+        screen.colors.write_restore(&mut out);
+    }
     emit_relative_move(&mut out, pen, (cur_row, cur_col));
     out
 }
@@ -788,6 +808,65 @@ mod tests {
     fn paint_plain(m: &EchoMatcher, screen: &ScreenState) -> Vec<u8> {
         let mut g = PaintGate::new();
         build_annotations_with(&mut g, m, screen, true, PLAIN, false)
+    }
+
+    #[test]
+    fn highlight_restores_host_pen_and_original_cell_backgrounds() {
+        use crate::screen::{Color, ScreenObserver};
+        let mut host = ScreenObserver::new(80, 24);
+        let mut display = ScreenObserver::new(80, 24);
+        let mut matcher = EchoMatcher::new();
+        let mut events = Vec::new();
+        let initial = b"\x1b[48;5;238m\x1b[38;5;252mreacon ";
+        host.observe_with_events(initial, &mut events);
+        display.observe(initial);
+        for event in &events {
+            matcher.apply_screen_event(event);
+        }
+        matcher.apply_input(InputEvent::Lints {
+            issues: vec![issue(0, 6, "reacon")],
+            buffer_chars: 7,
+            buffer_text: "reacon ".into(),
+            buffer_cursor: 0,
+        });
+        let mut gate = PaintGate::new();
+        let painted =
+            build_annotations_with(&mut gate, &matcher, host.state(), true, HIGHLIGHT, false);
+        display.observe(&painted);
+        assert_eq!(
+            display.state().colors,
+            host.state().colors,
+            "next Codex write must retain its pen colors"
+        );
+        assert_eq!(
+            display.state().colors_at(0, 0).background,
+            Color::Indexed(52)
+        );
+        // A partial host redraw fixes the suffix with a different original color,
+        // then resets its pen. Cleanup must restore each cell, not a global default.
+        let corrected = b"\x1b[4G\x1b[48;5;239mson\x1b[0m";
+        events.clear();
+        host.observe_with_events(corrected, &mut events);
+        display.observe(corrected);
+        for event in &events {
+            matcher.apply_screen_event(event);
+        }
+        matcher.apply_input(InputEvent::Lints {
+            issues: vec![],
+            buffer_chars: 7,
+            buffer_text: "reason ".into(),
+            buffer_cursor: 0,
+        });
+        let cleanup =
+            build_annotations_with(&mut gate, &matcher, host.state(), true, HIGHLIGHT, false);
+        display.observe(&cleanup);
+        for col in 0..6 {
+            assert_eq!(
+                display.state().colors_at(0, col),
+                host.state().colors_at(0, col)
+            );
+        }
+        assert_eq!(display.state().colors, host.state().colors);
     }
 
     #[test]

@@ -7,12 +7,98 @@
 //! Why this matters: later phases need to know "where on the screen has the
 //! user's text been echoed?" so we can paint annotations there (phase 5) and
 //! dock the suggestion picker near the offending word (phase 6). We don't
-//! model a full screen grid — just cursor position, alt-screen mode, and the
+//! model a full character grid here — the echo matcher does that. We retain
+//! host foreground/background colors per observed cell, cursor position, and the
 //! saved-cursor stack. That's the minimum that makes echo-tracking work.
+
+use std::collections::HashMap;
 
 use vte::{Params, Parser, Perform};
 
 use crate::event::{EraseEvent, PrintEvent, ScreenEvent};
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Color {
+    #[default]
+    Default,
+    Indexed(u16),
+    Rgb(u16, u16, u16),
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Colors {
+    pub foreground: Color,
+    pub background: Color,
+}
+impl Colors {
+    pub fn write_restore(self, out: &mut Vec<u8>) {
+        for (color, code, reset) in [(self.foreground, 38, 39), (self.background, 48, 49)] {
+            let seq = match color {
+                Color::Default => format!("\x1b[{reset}m"),
+                Color::Indexed(n) => format!("\x1b[{code};5;{n}m"),
+                Color::Rgb(r, g, b) => format!("\x1b[{code};2;{r};{g};{b}m"),
+            };
+            out.extend_from_slice(seq.as_bytes());
+        }
+    }
+    fn apply(&mut self, params: &Params) {
+        let groups: Vec<_> = params.iter().collect();
+        let mut i = 0;
+        while i < groups.len() {
+            let group = groups[i];
+            let code = group[0];
+            match code {
+                0 => *self = Self::default(),
+                30..=37 => self.foreground = Color::Indexed(code - 30),
+                90..=97 => self.foreground = Color::Indexed(code - 90 + 8),
+                40..=47 => self.background = Color::Indexed(code - 40),
+                100..=107 => self.background = Color::Indexed(code - 100 + 8),
+                39 => self.foreground = Color::Default,
+                49 => self.background = Color::Default,
+                38 | 48 | 58 => {
+                    let values: Vec<u16> = if group.len() > 1 {
+                        group[1..].to_vec()
+                    } else {
+                        let mode = groups.get(i + 1).map(|g| g[0]).unwrap_or(0);
+                        let count = match mode {
+                            5 => 2,
+                            2 => 4,
+                            _ => 0,
+                        };
+                        if count == 0 || i + count >= groups.len() {
+                            i += 1;
+                            continue;
+                        }
+                        let vals = groups[i + 1..=i + count].iter().map(|g| g[0]).collect();
+                        i += count;
+                        vals
+                    };
+                    let color = match values.as_slice() {
+                        [5, n] if *n <= 255 => Some(Color::Indexed(*n)),
+                        [2, rest @ ..] if rest.len() >= 3 => {
+                            let c = &rest[rest.len() - 3..];
+                            if c.iter().all(|n| *n <= 255) {
+                                Some(Color::Rgb(c[0], c[1], c[2]))
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    };
+                    if let Some(color) = color {
+                        if code == 38 {
+                            self.foreground = color;
+                        } else if code == 48 {
+                            self.background = color;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CursorPos {
@@ -23,6 +109,8 @@ pub struct CursorPos {
 #[derive(Debug, Clone)]
 pub struct ScreenState {
     pub cursor: CursorPos,
+    pub colors: Colors,
+    cell_colors: HashMap<(u16, u16), Colors>,
     pub saved_cursor: Option<CursorPos>,
     pub cols: u16,
     pub rows: u16,
@@ -41,6 +129,8 @@ impl ScreenState {
     pub fn new(cols: u16, rows: u16) -> Self {
         Self {
             cursor: CursorPos { row: 0, col: 0 },
+            colors: Colors::default(),
+            cell_colors: HashMap::new(),
             saved_cursor: None,
             cols: cols.max(1),
             rows: rows.max(1),
@@ -50,8 +140,16 @@ impl ScreenState {
         }
     }
 
+    pub fn colors_at(&self, row: u16, col: u16) -> Colors {
+        self.cell_colors
+            .get(&(row, col))
+            .copied()
+            .unwrap_or(self.colors)
+    }
+
     /// Update on SIGWINCH. Clamps the cursor if the new size is smaller.
     pub fn resize(&mut self, cols: u16, rows: u16) {
+        self.cell_colors.clear();
         self.cols = cols.max(1);
         self.rows = rows.max(1);
         if self.cursor.row >= self.rows {
@@ -126,12 +224,21 @@ struct StatePerformer<'a> {
 
 impl<'a> StatePerformer<'a> {
     fn push_print(&mut self, ch: char, at: crate::screen::CursorPos) {
+        if self.state.cell_colors.len() >= 16384 {
+            self.state.cell_colors.clear();
+        }
+        self.state
+            .cell_colors
+            .insert((at.row, at.col), self.state.colors);
         if let Some(events) = self.events.as_deref_mut() {
             events.push(ScreenEvent::Print(PrintEvent { ch, at }));
         }
     }
 
     fn push_erase(&mut self, row: u16, col_start: u16, col_end: u16) {
+        self.state
+            .cell_colors
+            .retain(|&(r, c), _| r != row || c < col_start || c >= col_end);
         if col_end <= col_start {
             return;
         }
@@ -259,6 +366,7 @@ impl Perform for StatePerformer<'_> {
         let last_row = self.state.rows.saturating_sub(1);
 
         match action {
+            'm' => self.state.colors.apply(params),
             'A' => {
                 self.state.cursor.row = self.state.cursor.row.saturating_sub(p1);
                 self.state.bump_version();
@@ -438,6 +546,36 @@ mod tests {
                 ScreenEvent::Print(_) => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn remembers_palette_rgb_and_per_cell_colors() {
+        let mut observer = ScreenObserver::new(80, 24);
+        observer
+            .observe(b"\x1b[31;48;5;238ma\x1b[38;2;1;2;3;48:2::4:5:6mb\x1b[58;2;0;0;0mc\x1b[0m");
+        assert_eq!(
+            observer.state().colors_at(0, 0).foreground,
+            Color::Indexed(1)
+        );
+        assert_eq!(
+            observer.state().colors_at(0, 0).background,
+            Color::Indexed(238)
+        );
+        assert_eq!(
+            observer.state().colors_at(0, 1).foreground,
+            Color::Rgb(1, 2, 3)
+        );
+        assert_eq!(
+            observer.state().colors_at(0, 1).background,
+            Color::Rgb(4, 5, 6)
+        );
+        assert_eq!(
+            observer.state().colors_at(0, 2).background,
+            Color::Rgb(4, 5, 6)
+        );
+        assert_eq!(observer.state().colors, Colors::default());
+        observer.observe(b"\r\x1b[2K");
+        assert_eq!(observer.state().colors_at(0, 0), Colors::default());
     }
 
     #[test]

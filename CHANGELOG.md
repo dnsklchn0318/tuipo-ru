@@ -1,5 +1,11 @@
 # Changes
 
+## 0.4.2 — preserve Codex input colors
+
+- Restore the host foreground/background after highlighting instead of resetting
+  to terminal defaults, preventing dark strips in the Codex input field.
+- Restore original cell colors when a correction removes a highlight.
+
 ## 0.4.1 — readable error highlighting
 
 - Add optional `underline = "highlight"`: light text on a muted burgundy background.

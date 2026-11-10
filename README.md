@@ -1,6 +1,6 @@
 # tuipo-ru
 
-Version 0.4.1. Local Russian and English spelling checks **while you type in
+Version 0.4.2. Local Russian and English spelling checks **while you type in
 Codex CLI in Terminal.app**, with underlined mistakes and keyboard corrections.
 
 ## Start Codex with checking
