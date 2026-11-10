@@ -61,7 +61,7 @@ fn valid_empty_and_invalid_inputs() {
     }
 }
 #[test]
-fn rejects_symlink_fifo_and_old_wrapping() {
+fn rejects_symlink_and_fifo() {
     let f = Fixture::new();
     let target = f.0.join("target");
     fs::write(&target, "hello").unwrap();
@@ -83,10 +83,6 @@ fn rejects_symlink_fifo_and_old_wrapping() {
         f.run(&["check".as_ref(), fifo.as_os_str()]).status.code(),
         Some(2)
     );
-    let marker = f.0.join("executed");
-    let out = f.run(&["--".as_ref(), "touch".as_ref(), marker.as_os_str()]);
-    assert_eq!(out.status.code(), Some(2));
-    assert!(!marker.exists());
 }
 #[test]
 fn config_errors_suppress_contents() {

@@ -1,8 +1,8 @@
 [package]
 name = "tuipo"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
-description = "Local Russian and English spellchecking of explicitly selected text files"
+description = "Local Russian and English spellchecking while typing in terminal applications"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/dnsklchn0318/tuipo-ru"
 homepage = "https://github.com/dnsklchn0318/tuipo-ru"
@@ -17,6 +17,12 @@ name = "tuipo"
 path = "src/main.rs"
 
 [dependencies]
+crossterm = "0.28"
+portable-pty = "0.9"
+signal-hook = "0.3"
+unicode-segmentation = "1"
+unicode-width = "0.2"
+vte = "0.15"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 # Security adaptations are recorded in vendor/README.md.
@@ -28,6 +34,7 @@ spellbook = "0.4.2"
 toml = { version = "0.8", default-features = false, features = ["parse"] }
 
 [dev-dependencies]
+assert_cmd = "2"
 lru = "=0.18.2"
 
 [profile.release]

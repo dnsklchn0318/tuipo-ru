@@ -1,157 +1,154 @@
-//! Local checking of one explicitly selected file. No terminal proxy.
-use clap::{Parser, Subcommand};
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+//! tuipo — Grammarly-style spell-check overlay for any TUI.
+
+use clap::Parser;
+
+mod buffer;
 mod config;
+mod config_tui;
+mod debug;
 mod dict;
+mod echo;
+mod engine;
+mod event;
+mod file_check;
+mod fix;
+mod init;
+mod input;
+mod lint_worker;
+mod paint;
+mod picker;
+mod pty;
+mod screen;
 mod spell;
-const MAX_BYTES: u64 = 1 << 20;
+mod status;
+mod term;
 
-#[derive(Parser)]
-#[command(
-    version,
-    about = "Check an explicitly selected UTF-8 file locally",
-    arg_required_else_help = true
-)]
+#[derive(Parser, Debug)]
+#[command(version, about = "Spell-check overlay for any TUI", long_about = None)]
 struct Args {
-    #[command(subcommand)]
-    command: Commands,
-}
-#[derive(Subcommand)]
-enum Commands {
-    /// Report RU/EN spelling mistakes without changing the file.
-    Check { file: PathBuf },
-    #[command(hide = true)]
-    Engine,
+    /// Command and arguments to wrap. Use `--` to separate tuipo's flags
+    /// from the wrapped command's flags, e.g. `tuipo -- claude --model opus`.
+    #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+    command: Vec<String>,
 }
 
-fn read_file(path: &Path) -> Result<String, &'static str> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
-        .open(path)
-        .map_err(|_| "cannot open selected regular file")?;
-    let meta = file
-        .metadata()
-        .map_err(|_| "cannot inspect selected file")?;
-    if !meta.is_file() || meta.len() > MAX_BYTES {
-        return Err("expected a regular file of at most 1 MiB");
-    }
-    read_text(file)
-}
-fn read_text(reader: impl Read) -> Result<String, &'static str> {
-    let mut bytes = Vec::new();
-    reader
-        .take(MAX_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| "cannot read selected text")?;
-    if bytes.len() as u64 > MAX_BYTES {
-        return Err("selected text exceeds 1 MiB");
-    }
-    String::from_utf8(bytes).map_err(|_| "selected text is not UTF-8")
-}
-fn escaped(text: &str) -> String {
-    text.chars().flat_map(|c| {
-        if c.is_control() || matches!(c, '\u{061c}' | '\u{200e}'..='\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}') {
-            c.escape_unicode().collect::<Vec<_>>()
-        } else { vec![c] }
-    }).collect()
-}
-fn check_file(path: &Path) -> Result<i32, &'static str> {
-    use std::process::{Command, Stdio};
-    let text = read_file(path)?;
-    let mut command = Command::new(std::env::current_exe().map_err(|_| "engine unavailable")?);
-    command
-        .arg("engine")
-        .env_clear()
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    for key in ["HOME", "XDG_CONFIG_HOME"] {
-        if let Some(value) = std::env::var_os(key) {
-            command.env(key, value);
-        }
-    }
-    let mut child = command.spawn().map_err(|_| "cannot start local engine")?;
-    let sent = child
-        .stdin
-        .take()
-        .ok_or("engine input unavailable")?
-        .write_all(text.as_bytes());
-    let output = child
-        .wait_with_output()
-        .map_err(|_| "local engine failed")?;
-    if sent.is_err() || !output.status.success() {
-        return Err("local engine or configuration failed");
-    }
-    let issues: Vec<spell::SpellIssue> =
-        serde_json::from_slice(&output.stdout).map_err(|_| "invalid engine result")?;
-    let mut count = 0;
-    for issue in issues {
-        let Some(prefix) = text.get(..issue.byte_start) else {
-            return Err("invalid engine position");
-        };
-        let line = prefix.bytes().filter(|b| *b == b'\n').count() + 1;
-        let col = prefix.rsplit('\n').next().unwrap_or("").chars().count() + 1;
-        println!(
-            "{line}:{col}: {} -> {}",
-            escaped(&issue.word),
-            issue
-                .suggestions
-                .iter()
-                .map(|s| escaped(s))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-        count += 1;
-    }
-    Ok(i32::from(count > 0))
-}
-fn engine() -> Result<i32, &'static str> {
-    config::load_global()?;
-    let text = read_text(std::io::stdin().lock())?;
-    let mut checker = spell::SpellChecker::new();
-    let issues: Vec<_> = checker
-        .check(&text)
-        .into_iter()
-        .filter(|i| spell::is_actionable_category(i.category, config::get().grammar))
-        .collect();
-    serde_json::to_writer(std::io::stdout().lock(), &issues).map_err(|_| "engine output failed")?;
-    Ok(0)
-}
 fn main() {
-    std::panic::set_hook(Box::new(|_| {
-        eprintln!("tuipo: internal failure (contents suppressed)")
-    }));
-    let result = match Args::parse().command {
-        Commands::Check { file } => check_file(&file),
-        Commands::Engine => engine(),
-    };
-    let code = match result {
-        Ok(code) => code,
-        Err(message) => {
-            eprintln!("tuipo: {message}");
-            2
+    // Handle subcommands before clap parses, because clap's
+    // `trailing_var_arg` would otherwise consume `init` as part of the
+    // wrapped command. We intercept the first positional arg.
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.first().map(String::as_str) == Some("check") {
+        std::process::exit(file_check::run(&argv));
+    }
+    if argv.first().map(String::as_str) == Some("__file_engine") {
+        std::process::exit(file_check::run(&["engine".into()]));
+    }
+    // The spell engine child (spawned by the lint worker) speaks a binary
+    // protocol on stdin/stdout and never touches the terminal, so it skips
+    // raw mode. It uses a content-free panic hook and the same config.
+    if argv.first().map(String::as_str) == Some(engine::ENGINE_SUBCOMMAND) {
+        term::install_panic_hook();
+        config::load_global();
+        std::process::exit(engine::run_server());
+    }
+    term::install_panic_hook();
+    if argv.first().map(String::as_str) == Some("init") {
+        std::process::exit(init::run_init(&argv[1..]));
+    }
+    if argv.first().map(String::as_str) == Some("off") {
+        std::process::exit(init::run_off());
+    }
+    if argv.first().map(String::as_str) == Some("on") {
+        std::process::exit(init::run_on());
+    }
+    if argv.first().map(String::as_str) == Some("status") {
+        std::process::exit(init::run_status());
+    }
+    if argv.first().map(String::as_str) == Some("config") {
+        // Config is loaded inside the TUI from the file directly, so we
+        // intentionally do NOT call `config::load_global()` for this
+        // subcommand — the user is editing the file, not running tuipo
+        // against it.
+        std::process::exit(config_tui::run(&argv[1..]));
+    }
+    if argv.first().map(String::as_str) == Some("help")
+        || argv.first().map(String::as_str) == Some("--help")
+        || argv.first().map(String::as_str) == Some("-h")
+    {
+        print_help();
+        std::process::exit(0);
+    }
+    let args = Args::parse();
+    if config::restricted_launch() || config::switched_off() {
+        run_unwrapped(&args.command);
+    }
+    // Load the persistent config once, before any thread starts. Env vars
+    // still override individual settings — see `config::Config` for the
+    // precedence rules.
+    config::load_global();
+    if config::get().languages.is_empty() {
+        run_unwrapped(&args.command);
+    }
+    if config::get().validate_spelling().is_err() {
+        eprintln!("tuipo: invalid spelling configuration; refusing to start checking");
+        std::process::exit(1);
+    }
+    match pty::run(args.command) {
+        Ok(code) => std::process::exit(code),
+        Err(_) => {
+            eprintln!("tuipo: could not start PTY or selected application (details suppressed)");
+            std::process::exit(1);
         }
-    };
-    std::process::exit(code);
+    }
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn bounded_utf8() {
-        assert!(read_text(&b"\xff"[..]).is_err());
-        assert!(read_text(&vec![b'a'; MAX_BYTES as usize + 1][..]).is_err());
-        assert_eq!(read_text(&b""[..]).unwrap(), "");
-    }
-    #[test]
-    fn escape_terminal_and_bidi() {
-        let value = escaped("привет\x1b[2J\n\u{202e}");
-        assert!(!value.contains('\x1b'));
-        assert!(!value.contains('\n'));
-        assert!(!value.contains('\u{202e}'));
-        assert!(value.starts_with("привет"));
-    }
+
+/// `tuipo off` is in effect: become the command instead of wrapping it, as
+/// if tuipo weren't installed. `TUIPO_ACTIVE` stops the shell hook in a
+/// wrapped shell's rc file from launching tuipo again (an exec loop).
+fn run_unwrapped(command: &[String]) -> ! {
+    use std::os::unix::process::CommandExt;
+    let err = std::process::Command::new(&command[0])
+        .args(&command[1..])
+        .env("TUIPO_ACTIVE", "1")
+        .exec();
+    eprintln!(
+        "tuipo: selected application could not start ({:?})",
+        err.kind()
+    );
+    std::process::exit(127);
+}
+
+fn print_help() {
+    println!("tuipo — Grammarly-style spell-check overlay for any TUI\n");
+    println!("USAGE:");
+    println!("  tuipo check -- <file>          Check a file without changing it");
+    println!("  tuipo -- <command> [args...]    Wrap a command under tuipo");
+    println!("  tuipo init                      Disabled: use explicit per-app launch");
+    println!("  tuipo off                       Disable processing in running wrappers;");
+    println!("                                   new launches bypass the wrapper");
+    println!("  tuipo on                        Enable checking for subsequent launches");
+    println!("  tuipo status                    Show mode and explicit launch instructions");
+    println!("  tuipo config                    Interactive TUI to edit settings");
+    println!("  tuipo config --print            Print current config as TOML");
+    println!("  tuipo config --path             Print the config file path");
+    println!("  tuipo --help                    Show this help");
+    println!("  tuipo --version                 Show version");
+    println!();
+    println!("CONFIG:");
+    println!("  ~/.config/tuipo/config.toml     Persistent settings (paint, underline,");
+    println!("                                   tab_fix, picker, status_row, pause_ms,");
+    println!("                                   hover_ms, dict_path). All optional.");
+    println!("  ~/.config/tuipo/dict.txt        Per-user custom dictionary (one word/line).");
+    println!();
+    println!("ENV VARS (always override the config):");
+    println!("  TUIPO_PRIVATE=1                Run selected app directly; no input processing");
+    println!("  TUIPO_ACTIVE                    Set by tuipo on the wrapped child");
+    println!("  TUIPO_DEBUG_LOG=<path>          Metadata-only private debug log");
+    println!("  TUIPO_PAINT_OFF=1               Disable overlay; input is still processed");
+    println!("  TUIPO_STATUS=on                 Show always-on issue count status row");
+    println!("  TUIPO_TAB_FIX=1                 Opt in to Tab=apply-top-suggestion");
+    println!("  TUIPO_GRAMMAR=1                 Opt in to narrow grammar lints");
+    println!("  TUIPO_PLAIN_UNDERLINE=1         Force plain underline (Apple Terminal-safe)");
+    println!("  TUIPO_FANCY_UNDERLINE=1         Force curly red underline (overrides Auto)");
+    println!("  TUIPO_ENGINE_IDLE_SECS=<n>      Stop the spell engine after n idle seconds (60)");
 }

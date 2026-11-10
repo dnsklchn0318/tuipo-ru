@@ -44,6 +44,10 @@
     "license": "MIT OR Apache-2.0"
   },
   {
+    "package": "arrayvec v0.7.6",
+    "license": "MIT OR Apache-2.0"
+  },
+  {
     "package": "atomic_float v1.1.0",
     "license": "Apache-2.0 OR MIT OR Unlicense"
   },
@@ -54,6 +58,10 @@
   {
     "package": "bincode v2.0.1",
     "license": "MIT"
+  },
+  {
+    "package": "bitflags v1.3.2",
+    "license": "MIT/Apache-2.0"
   },
   {
     "package": "bitflags v2.11.1",
@@ -188,6 +196,14 @@
     "license": "MIT OR Apache-2.0"
   },
   {
+    "package": "crossterm v0.28.1",
+    "license": "MIT"
+  },
+  {
+    "package": "crossterm_winapi v0.9.1",
+    "license": "MIT"
+  },
+  {
     "package": "crunchy v0.2.4",
     "license": "MIT"
   },
@@ -248,6 +264,10 @@
     "license": "MIT OR Apache-2.0"
   },
   {
+    "package": "downcast-rs v1.2.1",
+    "license": "MIT/Apache-2.0"
+  },
+  {
     "package": "dtoa v1.0.11",
     "license": "MIT OR Apache-2.0"
   },
@@ -288,12 +308,20 @@
     "license": "Apache-2.0 OR MIT"
   },
   {
+    "package": "errno v0.3.14",
+    "license": "MIT OR Apache-2.0"
+  },
+  {
     "package": "fastrand v2.4.1",
     "license": "Apache-2.0 OR MIT"
   },
   {
     "package": "fid-rs v0.2.0",
     "license": "MIT OR Apache-2.0"
+  },
+  {
+    "package": "filedescriptor v0.8.3",
+    "license": "MIT"
   },
   {
     "package": "flate2 v1.1.9",
@@ -460,6 +488,10 @@
     "license": "MIT OR Apache-2.0"
   },
   {
+    "package": "lazy_static v1.5.0",
+    "license": "MIT OR Apache-2.0"
+  },
+  {
     "package": "levenshtein_automata v0.2.1",
     "license": "MIT"
   },
@@ -470,6 +502,10 @@
   {
     "package": "libm v0.2.16",
     "license": "MIT"
+  },
+  {
+    "package": "linux-raw-sys v0.4.15",
+    "license": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT"
   },
   {
     "package": "litemap v0.8.2",
@@ -514,6 +550,10 @@
   {
     "package": "miniz_oxide v0.8.9",
     "license": "MIT OR Zlib OR Apache-2.0"
+  },
+  {
+    "package": "mio v1.2.0",
+    "license": "MIT"
   },
   {
     "package": "nb v0.1.3",
@@ -612,6 +652,10 @@
     "license": "Apache-2.0 OR MIT"
   },
   {
+    "package": "portable-pty v0.9.0",
+    "license": "MIT"
+  },
+  {
     "package": "potential_utf v0.1.5",
     "license": "Unicode-3.0"
   },
@@ -708,6 +752,10 @@
     "license": "MIT OR Apache-2.0"
   },
   {
+    "package": "rustix v0.38.44",
+    "license": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT"
+  },
+  {
     "package": "rustversion v1.0.22",
     "license": "MIT OR Apache-2.0"
   },
@@ -745,6 +793,30 @@
   },
   {
     "package": "serde_spanned v0.6.9",
+    "license": "MIT OR Apache-2.0"
+  },
+  {
+    "package": "serial2 v0.2.37",
+    "license": "BSD-2-Clause OR Apache-2.0"
+  },
+  {
+    "package": "shared_library v0.1.9",
+    "license": "Apache-2.0/MIT"
+  },
+  {
+    "package": "shell-words v1.1.1",
+    "license": "MIT/Apache-2.0"
+  },
+  {
+    "package": "signal-hook v0.3.18",
+    "license": "Apache-2.0/MIT"
+  },
+  {
+    "package": "signal-hook-mio v0.2.5",
+    "license": "MIT OR Apache-2.0"
+  },
+  {
+    "package": "signal-hook-registry v1.4.8",
     "license": "MIT OR Apache-2.0"
   },
   {
@@ -848,7 +920,7 @@
     "license": "MIT OR Apache-2.0"
   },
   {
-    "package": "tuipo v0.2.0",
+    "package": "tuipo v0.4.0",
     "license": "MIT OR Apache-2.0"
   },
   {
@@ -912,6 +984,10 @@
     "license": "MIT"
   },
   {
+    "package": "vte v0.15.0",
+    "license": "Apache-2.0 OR MIT"
+  },
+  {
     "package": "walkdir v2.5.0",
     "license": "Unlicense/MIT"
   },
@@ -952,8 +1028,20 @@
     "license": "MIT OR Apache-2.0"
   },
   {
+    "package": "winapi v0.3.9",
+    "license": "MIT/Apache-2.0"
+  },
+  {
+    "package": "winapi-i686-pc-windows-gnu v0.4.0",
+    "license": "MIT/Apache-2.0"
+  },
+  {
     "package": "winapi-util v0.1.11",
     "license": "Unlicense OR MIT"
+  },
+  {
+    "package": "winapi-x86_64-pc-windows-gnu v0.4.0",
+    "license": "MIT/Apache-2.0"
   },
   {
     "package": "windows-link v0.2.1",
@@ -1005,6 +1093,10 @@
   },
   {
     "package": "winnow v0.7.15",
+    "license": "MIT"
+  },
+  {
+    "package": "winreg v0.10.1",
     "license": "MIT"
   },
   {

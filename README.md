@@ -1,75 +1,93 @@
 # tuipo-ru
 
-Version 0.3.0 — explicit file checking.
+Version 0.4.0. Local Russian and English spelling checks **while you type in
+Codex CLI in Terminal.app**, with underlined mistakes and keyboard corrections.
 
-Local Russian and English spelling checks for an explicitly selected UTF-8 file.
-The executable is `tuipo`. Russian uses Spellbook and the bundled LibreOffice
-Hunspell dictionary; English uses Harper. Text is not sent to a spelling service.
+## Start Codex with checking
+
+From this source directory:
 
 ```sh
 cargo build --locked --release
-./target/release/tuipo check -- draft.txt
+./target/release/tuipo -- codex
 ```
 
-Results are `line:column: word -> suggestions`, with one-based Unicode scalar
-columns. Suggestions are informational: the file is never modified. Exit status:
-0 means no findings, 1 means findings, 2 means a read/configuration/checking error.
-Files must be regular UTF-8 files of at most 1 MiB; final-component symlinks and
-special files are refused. Terminal control and bidi formatting characters are
-escaped in results. Shell redirection can deliberately save results containing text.
+With a prepared archive, extract it and run `./tuipo -- codex` from the extracted
+directory. Codex must already be available in PATH. To use another project, change
+to that project's directory and invoke Tuipo by its absolute path followed by
+`-- codex`. The wrapper preserves your working directory and forwards Codex arguments.
 
-Tuipo does not wrap Codex, start applications, intercept terminal input, access the
-clipboard or install shell integration. Draft text in your own editor, check its
-file, then transfer it yourself. Files explicitly selected for checking can contain
-secrets: Tuipo will read those too. The selected text exists in process memory.
+Tuipo starts Codex and checks input automatically. It does not add checking to a
+Codex process that is already running; exit that process and start the command above.
 
-## Configuration
+## Correct a word
 
-Read-only settings: `$XDG_CONFIG_HOME/tuipo/config.toml`, otherwise
-`~/.config/tuipo/config.toml`. Missing settings use defaults; invalid settings fail
-with status 2 and a content-free diagnostic. Old terminal settings must be removed
-manually; Tuipo never rewrites your configuration.
+1. Type `превет world ` and wait briefly for the underline.
+2. Move the cursor inside `превет` or immediately after its last letter.
+3. Press **Ctrl+N** to open suggestions. Ctrl+N/P cycles forward/backward.
+4. Press **Enter** to apply the selected correction, or **Escape** to dismiss.
+
+Text changes only after confirmation. Submit the prompt with a separate Enter.
+Tab keeps Codex completion by default. Russian and English are checked together;
+no language switching is required. Terminal.app uses plain underline automatically.
+The intended correction is not necessarily the first candidate.
+
+## Local operation
+
+The spelling engine and dictionaries run on your Mac. Tuipo has no cloud spelling
+client or telemetry and does not save prompt text to its debug log. It checks the
+selected terminal session; it does not scan projects or read .env files. The selected
+application's own networking remains its own behavior.
+
+The wrapper sees text typed in that session. It does not identify every secret field.
+For a session without checking, simply launch `codex` directly. No global keyboard
+listener, GUI permissions, background service or shell hook is installed.
+
+```sh
+./target/release/tuipo off     # stop checking; new launches bypass the wrapper
+./target/release/tuipo on      # enable for the next launch; restart Codex
+./target/release/tuipo status
+```
+
+## Settings and optional file checks
+
+Read `$XDG_CONFIG_HOME/tuipo/config.toml`, otherwise `~/.config/tuipo/config.toml`.
+Both languages and interactive corrections are on by default. Optional settings:
 
 ```toml
 languages = ["ru_RU", "en_US"]
+interactive = true
+next_key = "ctrl+n"
+previous_key = "ctrl+p"
+underline = "auto"
+pause_ms = 150
 grammar = false
 # dict_path = "/absolute/path/exceptions.txt"
-# russian_aff_path = "/absolute/path/ru_RU.aff"
-# russian_dic_path = "/absolute/path/ru_RU.dic"
 ```
 
-Both Russian dictionary paths must be supplied together. Exceptions contain one
-word per line, case-insensitive, with `#` comments. The default user exception file
-is the config directory's `dict.txt`. These explicitly configured resources must be
-trusted. The checker subprocess receives only HOME/XDG_CONFIG_HOME, not the full
-parent environment. It is a memory-lifetime boundary, not an OS sandbox.
+Exceptions: one word per line, case-insensitive, `#` comments. The default exception
+file is `dict.txt` beside config.toml. Custom Russian aff/dic paths must be supplied
+together. The original terminal settings and config TUI remain supported.
 
-## Status and checks
+`tuipo check -- draft.txt` is an optional file-only command, not the primary workflow.
+It reads a regular UTF-8 file of at most 1 MiB without modifying it; exit codes are
+0 no findings, 1 findings, 2 error.
 
-This is an experimental source checkout. Source publication readiness, dependency
-security, binary redistribution and installation/run decisions are separate.
-See [publication review](docs/PUBLICATION_AUDIT.md), [security](SECURITY.md),
-[dependency reachability](docs/DEPENDENCY_REACHABILITY.md) and
-[validation](docs/VALIDATION.md). No installer or publishing workflow is enabled.
+Menus can pass keys through when the screen has insufficient free space, during
+paste or with stale results. Complex graphemes and wide input characters disable
+injected corrections conservatively. See [validation](docs/VALIDATION.md).
+
+## Development and provenance
 
 ```sh
 cargo fmt --check
 cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
-cargo build --locked --release
 python3 scripts/check-local-policy.py
-python3 scripts/audit-repository.py
 ```
 
-Known ZIP/LRU advisories are addressed by documented local Harper adaptations in
-[vendor](vendor/README.md). Maintenance warnings for bincode/paste remain visible
-in the committed audit. Neither successful scans nor local execution prove absence
-of unknown vulnerabilities. Spelling is dictionary-based, with heuristic code
-filtering and no Russian grammar or reliable detection of real-word errors.
-
 Based on [Tuipo by ARahim3](https://github.com/ARahim3/tuipo), MIT OR Apache-2.0.
-The original terminal implementation remains in Git history; this version checks
-selected files. Original credits and licenses are retained. Fork maintainer:
-`dnsklchn0318`. See [third-party notices](THIRD_PARTY_NOTICES.md).
-
-[Русская документация](docs/README.ru.md)
+Fork maintainer: `dnsklchn0318`. Russian uses Spellbook and LibreOffice Hunspell;
+English uses Harper. ZIP/LRU updates remain in [vendor](vendor/README.md).
+[Third-party notices](THIRD_PARTY_NOTICES.md) · [Dependency report](docs/DEPENDENCY_REACHABILITY.md)
+· [Русская инструкция](docs/README.ru.md).
