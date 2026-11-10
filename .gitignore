@@ -80,3 +80,6 @@ __pycache__/
 .fseventsd/
 .idea/
 .vscode/
+
+# Private backups and publication workspace.
+/artifacts/

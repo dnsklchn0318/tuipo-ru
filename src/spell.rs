@@ -75,7 +75,7 @@ const HYPHEN_PREFIXES: &[&str] = &[
     "meta", "pseudo", "quasi", "ultra", "hyper", "super",
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum IssueCategory {
     Spelling,
     Grammar,
@@ -153,7 +153,7 @@ pub fn is_actionable_category(category: IssueCategory, grammar_enabled: bool) ->
 /// What we surface to the rest of the program. We carry *both* byte offsets
 /// (for buffer/cursor work) and char offsets (for echo-tracker lookups,
 /// which are char-indexed) so callers never have to convert between them.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[allow(dead_code)]
 pub struct SpellIssue {
     pub byte_start: usize,
@@ -640,10 +640,7 @@ fn load_russian() -> Option<Arc<spellbook::Dictionary>> {
     };
     match load() {
         Ok(dict) => Some(Arc::new(dict)),
-        Err(err) => {
-            eprintln!("tuipo: Russian dictionary unavailable: {err}");
-            None
-        }
+        Err(_) => panic!("Russian dictionary unavailable"),
     }
 }
 

@@ -1,0 +1,112 @@
+--- upstream/harper-pos-utils/Cargo.toml
++++ modified/harper-pos-utils/Cargo.toml
+@@ -30,8 +30,8 @@
+ threaded = ["dep:rayon"]
+ training = [
+     "dep:rand",
+-    "burn/train",
+-    "burn/autodiff",
++    "dep:burn-autodiff",
++    "dep:burn-optim",
+ ]
+ 
+ [lib]
+@@ -39,6 +39,7 @@
+ path = "src/lib.rs"
+ 
+ [dependencies.burn]
++package = "burn-core"
+ version = "0.19.1"
+ features = ["std"]
+ default-features = false
+@@ -55,7 +56,7 @@
+ version = "0.3.7"
+ 
+ [dependencies.lru]
+-version = "0.16.3"
++version = "=0.18.2"
+ 
+ [dependencies.rand]
+ version = "0.10.0"
+@@ -80,3 +81,17 @@
+ 
+ [dependencies.strum_macros]
+ version = "0.28.0"
++
++[dependencies.burn-nn]
++version = "0.19.1"
++default-features = false
++features = ["std"]
++
++[dependencies.burn-autodiff]
++version = "0.19.1"
++optional = true
++
++[dependencies.burn-optim]
++version = "0.19.1"
++optional = true
++default-features = false
+--- upstream/harper-pos-utils/src/chunker/burn_chunker.rs
++++ modified/harper-pos-utils/src/chunker/burn_chunker.rs
+@@ -1,12 +1,13 @@
++use burn_nn::{BiLstmConfig, EmbeddingConfig, LinearConfig};
+ use crate::{UPOS, chunker::Chunker};
+ #[cfg(feature = "training")]
+-use burn::backend::Autodiff;
+-
+-#[cfg(feature = "training")]
+-use burn::nn::loss::{MseLoss, Reduction};
+-use burn::nn::{Dropout, DropoutConfig};
+-#[cfg(feature = "training")]
+-use burn::optim::{GradientsParams, Optimizer};
++use burn_autodiff::Autodiff;
++
++#[cfg(feature = "training")]
++use burn_nn::loss::{MseLoss, Reduction};
++use burn_nn::{Dropout, DropoutConfig};
++#[cfg(feature = "training")]
++use burn_optim::{GradientsParams, Optimizer};
+ use burn::record::{FullPrecisionSettings, NamedMpkBytesRecorder, NamedMpkFileRecorder, Recorder};
+ use burn::tensor::TensorData;
+ #[cfg(feature = "training")]
+@@ -14,7 +15,6 @@
+ 
+ use burn::{
+     module::Module,
+-    nn::{BiLstmConfig, EmbeddingConfig, LinearConfig},
+     tensor::{Int, Tensor, backend::Backend},
+ };
+ use burn_ndarray::{NdArray, NdArrayDevice};
+@@ -25,10 +25,10 @@
+ 
+ #[derive(Module, Debug)]
+ struct NpModel<B: Backend> {
+-    embedding_words: burn::nn::Embedding<B>,
+-    embedding_upos: burn::nn::Embedding<B>,
+-    lstm: burn::nn::BiLstm<B>,
+-    linear_out: burn::nn::Linear<B>,
++    embedding_words: burn_nn::Embedding<B>,
++    embedding_upos: burn_nn::Embedding<B>,
++    lstm: burn_nn::BiLstm<B>,
++    linear_out: burn_nn::Linear<B>,
+     dropout: Dropout,
+ }
+ 
+@@ -185,7 +185,7 @@
+         println!("Preparing model and training config...");
+ 
+         let mut model = NpModel::<B>::new(vocab.len(), word_embed_dim, dropout, &device);
+-        let opt_config = burn::optim::AdamConfig::new();
++        let opt_config = burn_optim::AdamConfig::new();
+         let mut opt = opt_config.init();
+ 
+         let util = BurnChunker {
+@@ -344,7 +344,7 @@
+ }
+ 
+ #[cfg(feature = "training")]
+-pub type BurnChunkerCpu = BurnChunker<burn::backend::Autodiff<NdArray>>;
++pub type BurnChunkerCpu = BurnChunker<burn_autodiff::Autodiff<NdArray>>;
+ 
+ #[cfg(not(feature = "training"))]
+ pub type BurnChunkerCpu = BurnChunker<NdArray>;

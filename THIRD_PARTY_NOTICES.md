@@ -13,6 +13,9 @@ Direct spell engines:
 | Spellbook | 0.4.2 | MPL-2.0 | https://github.com/helix-editor/spellbook |
 | Russian aff/dic | pinned LibreOffice commit | separate permissive license below | [provenance](assets/ru_RU/SOURCE.md) |
 
+Harper core and harper-pos-utils 2.0.0 are locally modified Apache-2.0 packages;
+see vendor/README.md and their included LICENSE-APACHE files.
+
 Spellbook is used unmodified. Its MPL text is included in
 [assets/ru_RU/SPELLBOOK-MPL-2.0.txt](assets/ru_RU/SPELLBOOK-MPL-2.0.txt).
 Cargo.lock fixes dependency versions and registry checksums. The active dependency

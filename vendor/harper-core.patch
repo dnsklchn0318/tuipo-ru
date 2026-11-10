@@ -1,0 +1,51 @@
+--- upstream/harper-core/Cargo.toml
++++ modified/harper-core/Cargo.toml
+@@ -80,7 +80,7 @@
+ version = "0.4.7"
+ 
+ [dependencies.harper-brill]
+-version = "2.0.0"
++version = "=2.0.0"
+ 
+ [dependencies.harper-thesaurus]
+ version = "2.0.0"
+@@ -101,7 +101,7 @@
+ features = ["fst_automaton"]
+ 
+ [dependencies.lru]
+-version = "0.16.3"
++version = "=0.18.2"
+ 
+ [dependencies.ordered-float]
+ version = "5.3.0"
+@@ -149,7 +149,7 @@
+ version = "0.2.2"
+ 
+ [dependencies.zip]
+-version = "8.5.0"
++version = "=9.5.0"
+ features = ["deflate"]
+ default-features = false
+ 
+--- upstream/harper-core/src/weir/parsing/stmt.rs
++++ modified/harper-core/src/weir/parsing/stmt.rs
+@@ -24,7 +24,7 @@
+ 
+     static PARSE_CACHE: LazyLock<
+         RwLock<LruCache<ParseStrParams, Arc<Ast>, hashbrown::DefaultHashBuilder>>,
+-    > = LazyLock::new(|| RwLock::new(LruCache::new(NonZeroUsize::new(10000).unwrap())));
++    > = LazyLock::new(|| RwLock::new(LruCache::with_hasher(NonZeroUsize::new(10000).unwrap(), hashbrown::DefaultHashBuilder::default())));
+ 
+     let weir_code = Arc::new(weir_code.to_owned());
+ 
+--- upstream/harper-core/src/weirpack/mod.rs
++++ modified/harper-core/src/weirpack/mod.rs
+@@ -128,7 +128,7 @@
+                 continue;
+             }
+ 
+-            let name = file.name().to_string();
++            let name = file.name()?.into_owned();
+             if name == "manifest.json" {
+                 if manifest.is_some() {
+                     return Err(Error::DuplicateManifest("manifest.json"));

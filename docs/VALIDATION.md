@@ -1,79 +1,42 @@
-# Validation of the RU/EN fork
+# Validation — explicit file checker, 2026-11-10
 
-Environment: macOS 27.2 (26B123), Darwin ARM64. Working branch:
-`feat/russian-spellcheck`. Tested in the existing local checkout.
+Environment: macOS ARM64, Rust 1.99.1. This report supersedes terminal-overlay
+validation from earlier commits; old PTY tests were removed with the proxy.
 
-| Check | Result |
-| --- | --- |
-| `cargo fmt --check` | Passed |
-| `cargo test` | 308 unit tests + 19 integration tests passed; one original diagnostic Harper probe ignored |
-| `cargo clippy --all-targets -- -D warnings` | Passed |
-| `cargo build --release` | Passed |
-| `git diff --check` | Passed |
+- `cargo test --locked --offline --quiet`: 51 unit tests passed, one inherited
+  Harper diagnostic ignored; 5 file-interface tests and 2 dependency regressions passed.
+- `cargo clippy --locked --offline --all-targets -- -D warnings`: passed.
+- `cargo fmt --check`, `git diff --check`: passed.
+- `cargo build --locked --offline --release`: passed.
+- Local-only guard: passed, 254 active normal/build crate names across all targets.
+- License inventory: 269 package/version entries, none missing a declared license.
+- cargo-audit 0.22.2, fetched RustSec DB
+  d9cb059f3217db87aeccd190b81eaffe8cc29cb9 (1,430 advisories): zero vulnerabilities,
+  no unsound warnings; bincode/paste maintenance warnings remain. A repeat outside
+  the sandbox completed including access to the crates.io index. `--deny warnings`
+  deliberately fails; no ignore configuration is present.
 
-The initial source tree required rustfmt changes outside the feature modules;
-these are included to make the repository-wide formatting check pass.
+File tests cover bilingual positions, empty/correct/invalid/oversize input,
+nonmodification, symlink/FIFO refusal, removed app-launch syntax, exception files,
+configuration diagnostic canaries, and absence of a requested debug file. Unit tests
+cover control/bidi escaping, bounded UTF-8 reading and the retained RU/EN behavior.
+Dependency regressions exercise ZIP 9 Weirpack round-trip with a Cyrillic name,
+malformed archive rejection, and LRU pop with a panicking key destructor followed
+by further cache insertion/eviction. The fixtures do not constitute exhaustive
+upstream tests or an exhaustive review of ZIP/LRU APIs.
 
-New tests exercise Russian inflections, common е/ё variants, mixed RU/EN prose,
-case-preserving suggestions, user exceptions, ignored technical text, Unicode
-span validation, replacements of different lengths at different cursor positions,
-conservative rejection of ambiguous graphemes, configurable/disabled keys,
-Ctrl+N/P cycling, Enter confirmation, Escape dismissal, edits invalidating a menu,
-unsafe-menu and paste passthrough, Cyrillic wrapping and ordinary wide prompt cells.
-The real engine protocol test now checks both English and Russian lints. All
-original tests are retained, including multiline paste, PTY forwarding, underline
-rendering, Tab fixes, resize/cursor models and engine lifecycle checks.
+The production dependency graph has no terminal/PTY or clipboard library; main only
+spawns its own engine with a cleared environment. Engine stdin is its internal
+pipe, not a stream captured from Codex. No native GUI/Codex verification is claimed
+or required for this file interface. Additional platforms and binary license bundles
+have not been validated. No installation or remote publication was performed.
 
-Additional smoke test used an actual PTY at 120×30 with the release binary wrapping
-`zsh -f`, an isolated temporary config directory, `TERM=xterm-256color` and
-`TERM_PROGRAM=Apple_Terminal`. No user dotfiles were changed. Typed
-`print -r -- "превет"`, moved the cursor before the closing quote, opened the
-menu with Ctrl+N, chose its last candidate `привет` with Ctrl+P, confirmed with
-Enter and submitted with a second Enter. Captured Zsh output contained `привет`;
-Zsh exited successfully. This validates ordinary Cyrillic ZLE editing and confirms
-that opening the menu and applying a replacement are separate actions. It does
-not establish compatibility with other Zsh bindings or plugins. Spellbook's first
-candidate for this typo was `ревет`; selecting the intended candidate matters.
+## Publication copy
 
-Codex CLI is present locally, but an interactive Codex session and native
-Terminal.app GUI rendering were not tested. Footer redraws, scrolling, native
-resize and visual cleanup remain manual checks in [RUSSIAN.md](RUSSIAN.md).
-Do not interpret simulated screen/model tests as native GUI verification.
-
-Known limits: no Russian grammar, dictionary-dependent proper names and е/ё
-context; heuristic CLI/code filtering; injected edits depend on the host's cursor
-and Backspace semantics; complex graphemes/wide characters in input conservatively
-disable overlays and correction; corrections on earlier pasted lines are refused;
-menus require an unoccupied, unambiguous position and may pass keys through in
-crowded/narrow screens. See the implementation document for details.
-
-## Security hardening follow-up
-
-The later security changes are documented in [SECURITY.md](../SECURITY.md).
-After removing content logging, adding canonical no-echo/private-mode handling and
-updating compatible dependencies, validation passed again on macOS 27.2 ARM64:
-
-- `cargo fmt --check`
-- `cargo test --locked`: 312 unit + 23 integration tests passed; one original
-  diagnostic test ignored. Includes real no-echo password-input and logging canaries.
-- `cargo clippy --locked --all-targets -- -D warnings`
-- `cargo build --locked --release`
-- `python3 scripts/check-local-policy.py`: passed for 275 active normal/build
-  packages across all targets.
-
-RustSec cargo-audit is **not passing**: eight zip vulnerability records and three
-warnings remain in the final lockfile. See the security document and committed
-JSON report for exact versions, upstream constraints and database revision.
-This follow-up does not add native GUI/Codex verification to the earlier results.
-
-## Publication-gate follow-up (2026-11-10)
-
-Current results supersede the older on/off/fallback behavior above.
-317 unit and 27 integration tests pass, with one original diagnostic probe ignored.
-Format, strict Clippy, release build and the local-only policy guard pass.
-`off` now permanently suspends input/screen reconstruction in an existing proxy;
-`on` affects new launches. SSH/nested launch bypass and engine-failure disabling
-are tested. `.gitignore` positive/public-file checks and the Cargo package file-list
-review pass. RustSec and historical metadata scans still fail their publication
-gates. See [PUBLICATION_AUDIT.md](PUBLICATION_AUDIT.md) and the committed reports.
-No native Terminal.app/Codex or terminal-GUI relaunch test was performed.
+The repository scanner's committed publication report records the implementation
+commit reviewed before the report-only commit. It scans current files plus every
+blob and commit identity reachable from local refs. The final report-only commit
+is checked again externally and contains no application changes. This avoids a
+self-referential claim that a report's own commit hash can occur inside the report.
+The original working repository intentionally retains its unsanitized history;
+its scan still fails. Only the separate publication copy has sanitized history.

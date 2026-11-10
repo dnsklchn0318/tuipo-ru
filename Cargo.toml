@@ -2,15 +2,15 @@
 name = "tuipo"
 version = "0.2.0"
 edition = "2024"
-description = "Local Russian and English terminal spellchecking with confirmed keyboard corrections"
+description = "Local Russian and English spellchecking of explicitly selected text files"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/ARahim3/tuipo"
-homepage = "https://github.com/ARahim3/tuipo"
+repository = "https://github.com/dnsklchn0318/tuipo-ru"
+homepage = "https://github.com/dnsklchn0318/tuipo-ru"
 readme = "README.md"
 keywords = ["spellcheck", "terminal", "tui", "cli", "pty"]
 categories = ["command-line-utilities", "text-processing"]
-authors = ["ARahim3 <erahim3@gmail.com>"]
-exclude = ["/tuipo_demo*.png", "/tuipo_demo.gif", "/assets/*.png", "/.github", "/CLAUDE.md", "/config.toml", "/RELEASING.md", ".DS_Store"]
+authors = ["ARahim3 <erahim3@gmail.com>", "dnsklchn0318"]
+exclude = ["/tuipo_demo*.png", "/tuipo_demo.gif", "/assets/*.png", "/.github", "/CLAUDE.md", "/config.toml", "/RELEASING.md", ".DS_Store", "/artifacts"]
 
 [[bin]]
 name = "tuipo"
@@ -19,26 +19,21 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-crossterm = "0.28"
-# Pinned exactly: harper-core >= 2.5 needs a much newer rustc (2.11 fails
-# on 1.93, builds on 1.99), so a loose `"2"` would break `cargo install
-# tuipo` for anyone not on a recent toolchain. 2.0.0 is what the test suite
-# and the lint selection in src/spell.rs are tuned against; an upgrade
-# was evaluated in Oct 2026 (see CLAUDE.md backlog) and deferred.
+# Security adaptations are recorded in vendor/README.md.
 harper-core = { version = "=2.0.0", default-features = false }
 nix = { version = "0.28", default-features = false, features = ["term"] }
-portable-pty = "0.9"
 serde = { version = "1", features = ["derive"] }
-signal-hook = "0.3"
+serde_json = "1"
 spellbook = "0.4.2"
 toml = { version = "0.8", default-features = false, features = ["parse"] }
-unicode-segmentation = "1"
-unicode-width = "0.2"
-vte = "0.15"
 
 [dev-dependencies]
-assert_cmd = "2"
+lru = "=0.18.2"
 
 [profile.release]
 lto = "thin"
 strip = "symbols"
+
+[patch.crates-io]
+harper-core = { path = "vendor/harper-core" }
+harper-pos-utils = { path = "vendor/harper-pos-utils" }

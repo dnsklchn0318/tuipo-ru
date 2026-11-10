@@ -79,6 +79,19 @@ for oid, path in objects:
         history.append({"object": oid, "path": path, "rules": rules})
 process.stdin.close()
 process.wait()
+# Commit identities are public data too. Retain the upstream author's established
+# public identity and the fork's GitHub-only identity; emit rules, never values.
+metadata = []
+for oid in git("rev-list", "--all").decode().splitlines():
+    raw = git("cat-file", "commit", oid).split(b"\n\n", 1)[0]
+    for line in raw.splitlines():
+        if line.startswith((b"author ", b"committer ")):
+            identity = line.split(b" ", 1)[1].rsplit(b">", 1)[0] + b">"
+            if identity not in {
+                b"ARahim3 <erahim3@gmail.com>",
+                b"dnsklchn0318 <354221970+dnsklchn0318@users.noreply.github.com>",
+            }:
+                metadata.append({"object": oid, "rules": ["unreviewed-commit-identity"]})
 report = {
     "scope": "working tracked files and blobs reachable from local refs; no remote scan",
     "method": "known credential signatures, forbidden paths and local home paths; no entropy or manual visual proof",
@@ -86,6 +99,7 @@ report = {
     "commits": int(git("rev-list", "--count", "--all")),
     "candidate_paths": len(tracked), "historical_blobs": count,
     "current_findings": current, "historical_findings": history,
+    "metadata_findings": metadata,
 }
 print(json.dumps(report, indent=2))
-sys.exit(1 if current or history else 0)
+sys.exit(1 if current or history or metadata else 0)
