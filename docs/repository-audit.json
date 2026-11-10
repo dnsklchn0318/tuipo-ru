@@ -1,10 +1,10 @@
 {
   "scope": "working tracked files and blobs reachable from local refs; no remote scan",
   "method": "known credential signatures, forbidden paths and local home paths; no entropy or manual visual proof",
-  "reviewed_head": "baafc7d99ed51b71ce072981b5a5cb9384b5ac5c",
-  "commits": 16,
-  "candidate_paths": 837,
-  "historical_blobs": 964,
+  "reviewed_head": "41a0edecedfd027f0c7eae950ac409487a89c995",
+  "commits": 19,
+  "candidate_paths": 856,
+  "historical_blobs": 987,
   "current_findings": [],
   "historical_findings": [],
   "metadata_findings": []
