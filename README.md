@@ -1,5 +1,7 @@
 # tuipo-ru
 
+Version 0.3.0 — explicit file checking.
+
 Local Russian and English spelling checks for an explicitly selected UTF-8 file.
 The executable is `tuipo`. Russian uses Spellbook and the bundled LibreOffice
 Hunspell dictionary; English uses Harper. Text is not sent to a spelling service.

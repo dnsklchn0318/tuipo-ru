@@ -1,13 +1,13 @@
 [package]
 name = "tuipo"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Local Russian and English spellchecking of explicitly selected text files"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/dnsklchn0318/tuipo-ru"
 homepage = "https://github.com/dnsklchn0318/tuipo-ru"
 readme = "README.md"
-keywords = ["spellcheck", "terminal", "tui", "cli", "pty"]
+keywords = ["spellcheck", "russian", "english", "cli", "text"]
 categories = ["command-line-utilities", "text-processing"]
 authors = ["ARahim3 <erahim3@gmail.com>", "dnsklchn0318"]
 exclude = ["/tuipo_demo*.png", "/tuipo_demo.gif", "/assets/*.png", "/.github", "/CLAUDE.md", "/config.toml", "/RELEASING.md", ".DS_Store", "/artifacts"]
